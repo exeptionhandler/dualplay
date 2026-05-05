@@ -611,11 +611,479 @@ export class BalloonGame implements GameModule {
 //     board?: CellState[][]  // full board sent after reveal (from host)
 //   }
 // ─────────────────────────────────────────────────────────
+// Cell states: -1 = mine, 0..8 = adjacent mine count
+// Display states: 'hidden' | 'revealed' | 'flagged'
+type CellDisplay = 'hidden' | 'revealed' | 'flagged';
+
+interface MSCell {
+  value: number;    // -1 = mine, 0-8 = count
+  display: CellDisplay;
+}
+
+const MS_COLS = 10;
+const MS_ROWS = 12;
+const MS_MINES = 18;
+
+// Doodle number colors (hand-drawn marker style)
+const MS_NUM_COLORS: Record<number, string> = {
+  1: '#74b9ff', // blue
+  2: '#55efc4', // green
+  3: '#ff7675', // red
+  4: '#a29bfe', // purple
+  5: '#d63031', // dark red
+  6: '#00cec9', // teal
+  7: '#2d3436', // black
+  8: '#636e72', // gray
+};
+
 export class MinesweeperGame implements GameModule {
-  init(_ctx: GameContext): void {
-    console.log('[MinesweeperGame] stub — Fase 2');
+  private ctx!: GameContext;
+  private animId = 0;
+  private canvasCtx!: CanvasRenderingContext2D;
+
+  private board: MSCell[][] = [];
+  private gameOver = false;
+  private won = false;
+  private flagMode = false;
+  private lastActionTs = 0;
+  private generated = false; // mines placed after first tap
+
+  init(ctx: GameContext): void {
+    this.ctx = ctx;
+    this.canvasCtx = ctx.canvas.getContext('2d')!;
+    this.gameOver = false;
+    this.won = false;
+    this.flagMode = false;
+    this.generated = false;
+
+    // Init empty board
+    this.board = [];
+    for (let r = 0; r < MS_ROWS; r++) {
+      this.board[r] = [];
+      for (let c = 0; c < MS_COLS; c++) {
+        this.board[r][c] = { value: 0, display: 'hidden' };
+      }
+    }
+
+    ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
+    ctx.sync.on('stateChange', this.onStateChange);
+
+    // If Host, broadcast initial empty board
+    if (ctx.isHost) {
+      this.broadcastBoard();
+    }
+
+    this.loop();
   }
-  destroy(): void { /* TODO */ }
+
+  // ── Mine Placement (Host only, after first tap) ──
+  private placeMines(safeR: number, safeC: number) {
+    let placed = 0;
+    while (placed < MS_MINES) {
+      const r = Math.floor(Math.random() * MS_ROWS);
+      const c = Math.floor(Math.random() * MS_COLS);
+      // Don't place on or adjacent to the first tap
+      if (Math.abs(r - safeR) <= 1 && Math.abs(c - safeC) <= 1) continue;
+      if (this.board[r][c].value === -1) continue;
+      this.board[r][c].value = -1;
+      placed++;
+    }
+    // Calculate adjacency numbers
+    for (let r = 0; r < MS_ROWS; r++) {
+      for (let c = 0; c < MS_COLS; c++) {
+        if (this.board[r][c].value === -1) continue;
+        let count = 0;
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < MS_ROWS && nc >= 0 && nc < MS_COLS && this.board[nr][nc].value === -1) {
+              count++;
+            }
+          }
+        }
+        this.board[r][c].value = count;
+      }
+    }
+    this.generated = true;
+  }
+
+  // ── Flood-fill reveal ──
+  private reveal(r: number, c: number) {
+    if (r < 0 || r >= MS_ROWS || c < 0 || c >= MS_COLS) return;
+    const cell = this.board[r][c];
+    if (cell.display !== 'hidden') return;
+
+    cell.display = 'revealed';
+
+    if (cell.value === -1) {
+      // BOOM — reveal all mines
+      this.gameOver = true;
+      this.won = false;
+      for (let rr = 0; rr < MS_ROWS; rr++) {
+        for (let cc = 0; cc < MS_COLS; cc++) {
+          if (this.board[rr][cc].value === -1) this.board[rr][cc].display = 'revealed';
+        }
+      }
+      return;
+    }
+
+    if (cell.value === 0) {
+      // Flood fill empty cells
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          this.reveal(r + dr, c + dc);
+        }
+      }
+    }
+  }
+
+  // ── Win check ──
+  private checkWin(): boolean {
+    for (let r = 0; r < MS_ROWS; r++) {
+      for (let c = 0; c < MS_COLS; c++) {
+        const cell = this.board[r][c];
+        if (cell.value !== -1 && cell.display !== 'revealed') return false;
+      }
+    }
+    return true;
+  }
+
+  // ── Toggle flag ──
+  private toggleFlag(r: number, c: number) {
+    const cell = this.board[r][c];
+    if (cell.display === 'revealed') return;
+    cell.display = cell.display === 'flagged' ? 'hidden' : 'flagged';
+  }
+
+  // ── Pointer handler ──
+  private onPointerDown = (e: PointerEvent) => {
+    if (this.gameOver || this.won) {
+      // Tap to restart
+      if (this.ctx.isHost) {
+        this.restart();
+        this.broadcastBoard();
+      }
+      return;
+    }
+
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    // Check flag toggle button (bottom-left)
+    const btnW = w * 0.35;
+    const btnH = h * 0.07;
+    const btnX = w * 0.08;
+    const btnY = h - btnH - h * 0.02;
+    if (px >= btnX && px <= btnX + btnW && py >= btnY && py <= btnY + btnH) {
+      this.flagMode = !this.flagMode;
+      return;
+    }
+
+    // Map click to grid cell
+    const boardH = h * 0.85;
+    const cellSize = Math.min(w / MS_COLS, boardH / MS_ROWS);
+    const offsetX = (w - cellSize * MS_COLS) / 2;
+    const offsetY = (boardH - cellSize * MS_ROWS) / 2;
+
+    const col = Math.floor((px - offsetX) / cellSize);
+    const row = Math.floor((py - offsetY) / cellSize);
+
+    if (row < 0 || row >= MS_ROWS || col < 0 || col >= MS_COLS) return;
+
+    // Send action through sync
+    this.ctx.sync.setState({
+      msAction: {
+        r: row, c: col,
+        flag: this.flagMode,
+        ts: Date.now(),
+        by: this.ctx.me.id
+      }
+    });
+
+    // If Host, also process locally
+    if (this.ctx.isHost) {
+      this.processAction(row, col, this.flagMode);
+      this.broadcastBoard();
+    }
+  };
+
+  private processAction(r: number, c: number, flag: boolean) {
+    if (this.gameOver || this.won) return;
+
+    if (flag) {
+      this.toggleFlag(r, c);
+    } else {
+      if (!this.generated) {
+        this.placeMines(r, c);
+      }
+      if (this.board[r][c].display === 'hidden') {
+        this.reveal(r, c);
+      }
+    }
+    if (!this.gameOver) {
+      this.won = this.checkWin();
+    }
+  }
+
+  private restart() {
+    this.gameOver = false;
+    this.won = false;
+    this.generated = false;
+    this.board = [];
+    for (let r = 0; r < MS_ROWS; r++) {
+      this.board[r] = [];
+      for (let c = 0; c < MS_COLS; c++) {
+        this.board[r][c] = { value: 0, display: 'hidden' };
+      }
+    }
+  }
+
+  // ── Sync ──
+  private broadcastBoard() {
+    // Serialize board state
+    const serialized = this.board.map(row => row.map(cell => ({
+      v: cell.value,
+      d: cell.display === 'hidden' ? 0 : cell.display === 'revealed' ? 1 : 2
+    })));
+    this.ctx.sync.setState({
+      msBoard: {
+        b: serialized,
+        over: this.gameOver,
+        won: this.won,
+        gen: this.generated,
+        ts: Date.now()
+      }
+    });
+  }
+
+  private onStateChange = (state: any) => {
+    // Host processes actions from guest
+    if (this.ctx.isHost && state.msAction && state.msAction.ts !== this.lastActionTs) {
+      this.lastActionTs = state.msAction.ts;
+      if (state.msAction.by !== this.ctx.me.id) {
+        this.processAction(state.msAction.r, state.msAction.c, state.msAction.flag);
+        this.broadcastBoard();
+      }
+    }
+
+    // Guest receives authoritative board
+    if (!this.ctx.isHost && state.msBoard) {
+      this.gameOver = state.msBoard.over;
+      this.won = state.msBoard.won;
+      this.generated = state.msBoard.gen;
+      const data = state.msBoard.b;
+      for (let r = 0; r < MS_ROWS; r++) {
+        for (let c = 0; c < MS_COLS; c++) {
+          if (data[r] && data[r][c]) {
+            this.board[r][c].value = data[r][c].v;
+            this.board[r][c].display = data[r][c].d === 0 ? 'hidden' : data[r][c].d === 1 ? 'revealed' : 'flagged';
+          }
+        }
+      }
+    }
+  };
+
+  // ── Game Loop ──
+  private loop = () => {
+    this.draw();
+    this.animId = requestAnimationFrame(this.loop);
+  };
+
+  private draw() {
+    const c = this.canvasCtx;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    c.clearRect(0, 0, w, h);
+
+    const boardH = h * 0.85;
+    const cellSize = Math.min(w / MS_COLS, boardH / MS_ROWS);
+    const offsetX = (w - cellSize * MS_COLS) / 2;
+    const offsetY = (boardH - cellSize * MS_ROWS) / 2;
+
+    c.save();
+    c.translate(offsetX, offsetY);
+
+    for (let r = 0; r < MS_ROWS; r++) {
+      for (let col = 0; col < MS_COLS; col++) {
+        const cell = this.board[r][col];
+        const x = col * cellSize;
+        const y = r * cellSize;
+        const pad = 1.5;
+
+        if (cell.display === 'hidden') {
+          // Raised cell — doodle style
+          c.fillStyle = '#e8e4df';
+          c.strokeStyle = '#2d3436';
+          c.lineWidth = 2;
+          c.beginPath();
+          c.rect(x + pad, y + pad, cellSize - pad * 2, cellSize - pad * 2);
+          c.fill();
+          c.stroke();
+
+          // Pencil hatching for texture
+          c.strokeStyle = 'rgba(0,0,0,0.06)';
+          c.lineWidth = 1;
+          for (let i = 0; i < cellSize; i += 5) {
+            c.beginPath();
+            c.moveTo(x + pad + i, y + pad);
+            c.lineTo(x + pad, y + pad + i);
+            c.stroke();
+          }
+        } else if (cell.display === 'revealed') {
+          // Flat revealed cell
+          c.fillStyle = '#fdfbf7';
+          c.strokeStyle = 'rgba(0,0,0,0.12)';
+          c.lineWidth = 1;
+          c.beginPath();
+          c.rect(x + pad, y + pad, cellSize - pad * 2, cellSize - pad * 2);
+          c.fill();
+          c.stroke();
+
+          if (cell.value === -1) {
+            // Draw mine (doodle bomb)
+            const cx = x + cellSize / 2;
+            const cy = y + cellSize / 2;
+            const mr = cellSize * 0.28;
+            // Body
+            c.fillStyle = '#2d3436';
+            c.beginPath();
+            c.arc(cx, cy, mr, 0, Math.PI * 2);
+            c.fill();
+            // Spikes
+            c.strokeStyle = '#2d3436';
+            c.lineWidth = 3;
+            c.lineCap = 'round';
+            for (let a = 0; a < 8; a++) {
+              const ang = (a / 8) * Math.PI * 2;
+              c.beginPath();
+              c.moveTo(cx + Math.cos(ang) * mr * 0.6, cy + Math.sin(ang) * mr * 0.6);
+              c.lineTo(cx + Math.cos(ang) * mr * 1.5, cy + Math.sin(ang) * mr * 1.5);
+              c.stroke();
+            }
+            // Highlight
+            c.fillStyle = 'rgba(255,255,255,0.6)';
+            c.beginPath();
+            c.arc(cx - mr * 0.3, cy - mr * 0.3, mr * 0.22, 0, Math.PI * 2);
+            c.fill();
+          } else if (cell.value > 0) {
+            // Draw number (hand-drawn style)
+            c.fillStyle = MS_NUM_COLORS[cell.value] || '#2d3436';
+            c.font = `bold ${cellSize * 0.6}px 'Patrick Hand', cursive`;
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            // Slight random rotation for doodle feel
+            c.save();
+            c.translate(x + cellSize / 2, y + cellSize / 2);
+            c.rotate(((r * 7 + col * 3) % 7 - 3) * 0.02);
+            c.fillText(String(cell.value), 0, 1);
+            c.restore();
+          }
+        } else if (cell.display === 'flagged') {
+          // Raised cell with flag
+          c.fillStyle = '#e8e4df';
+          c.strokeStyle = '#2d3436';
+          c.lineWidth = 2;
+          c.beginPath();
+          c.rect(x + pad, y + pad, cellSize - pad * 2, cellSize - pad * 2);
+          c.fill();
+          c.stroke();
+
+          // Draw flag (doodle style)
+          const fx = x + cellSize * 0.45;
+          const fy = y + cellSize * 0.2;
+          const fh = cellSize * 0.6;
+          // Pole
+          c.strokeStyle = '#2d3436';
+          c.lineWidth = 2.5;
+          c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(fx, fy);
+          c.lineTo(fx, fy + fh);
+          c.stroke();
+          // Flag triangle
+          c.fillStyle = '#ff7675';
+          c.beginPath();
+          c.moveTo(fx, fy);
+          c.lineTo(fx + cellSize * 0.35, fy + cellSize * 0.15);
+          c.lineTo(fx, fy + cellSize * 0.3);
+          c.closePath();
+          c.fill();
+          c.strokeStyle = '#2d3436';
+          c.lineWidth = 1.5;
+          c.stroke();
+        }
+      }
+    }
+
+    // Outer border
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 4;
+    c.strokeRect(0, 0, MS_COLS * cellSize, MS_ROWS * cellSize);
+
+    c.restore();
+
+    // ── Bottom UI: Flag toggle button & mine counter ──
+    const btnW = w * 0.35;
+    const btnH = h * 0.07;
+    const btnX = w * 0.08;
+    const btnY = h - btnH - h * 0.02;
+
+    // Flag button
+    c.fillStyle = this.flagMode ? '#ffeaa7' : 'white';
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.roundRect(btnX, btnY, btnW, btnH, 8);
+    c.fill();
+    c.stroke();
+
+    c.fillStyle = '#2d3436';
+    c.font = `${btnH * 0.55}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(this.flagMode ? '🚩 Bandera ON' : '👆 Revelar', btnX + btnW / 2, btnY + btnH / 2);
+
+    // Mine counter
+    let flagCount = 0;
+    for (let r = 0; r < MS_ROWS; r++) {
+      for (let col = 0; col < MS_COLS; col++) {
+        if (this.board[r][col].display === 'flagged') flagCount++;
+      }
+    }
+    c.fillStyle = '#2d3436';
+    c.font = `${btnH * 0.55}px 'Patrick Hand', cursive`;
+    c.textAlign = 'right';
+    c.fillText(`💣 ${MS_MINES - flagCount}`, w - w * 0.08, btnY + btnH / 2);
+
+    // ── Game Over / Win overlay ──
+    if (this.gameOver || this.won) {
+      c.fillStyle = 'rgba(253,251,247,0.85)';
+      c.fillRect(0, 0, w, h);
+
+      c.fillStyle = '#2d3436';
+      c.font = `bold ${w * 0.12}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(this.won ? '🎉' : '💥', w / 2, h * 0.35);
+
+      c.font = `bold ${w * 0.08}px 'Patrick Hand', cursive`;
+      c.fillText(this.won ? '¡Ganaron!' : '¡BOOM!', w / 2, h * 0.48);
+
+      c.font = `${w * 0.045}px 'Patrick Hand', cursive`;
+      c.fillStyle = '#636e72';
+      c.fillText('Toca para jugar de nuevo', w / 2, h * 0.58);
+    }
+  }
+
+  destroy(): void {
+    cancelAnimationFrame(this.animId);
+    this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.ctx.sync.off('stateChange', this.onStateChange);
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -628,11 +1096,429 @@ export class MinesweeperGame implements GameModule {
 //   Host (seer) responds:
 //   payload: { result: 'safe' | 'break', avatarX: number, avatarY: number }
 // ─────────────────────────────────────────────────────────
+// ── Crystal Bridge Types ──
+interface BridgeRow {
+  leftSafe: boolean;  // true = left tile is safe, false = right tile is safe
+}
+
+const CB_ROWS = 8;       // 8 pairs to cross
+const CB_LIVES = 3;
+
 export class CrystalBridgeGame implements GameModule {
-  init(_ctx: GameContext): void {
-    console.log('[CrystalBridgeGame] stub — Fase 2');
+  private ctx!: GameContext;
+  private animId = 0;
+  private canvasCtx!: CanvasRenderingContext2D;
+
+  private bridge: BridgeRow[] = [];
+  private avatarRow = -1;       // -1 = start platform, 0..7 = on bridge, 8 = finish
+  private avatarSide: 'left' | 'right' | null = null;
+  private lives = CB_LIVES;
+  private gameOver = false;
+  private won = false;
+  private revealed: boolean[][] = []; // which tiles have been stepped on (broken or safe)
+  private shakeTimer = 0;
+  private lastActionTs = 0;
+
+  init(ctx: GameContext): void {
+    this.ctx = ctx;
+    this.canvasCtx = ctx.canvas.getContext('2d')!;
+    this.gameOver = false;
+    this.won = false;
+    this.lives = CB_LIVES;
+    this.avatarRow = -1;
+    this.avatarSide = null;
+    this.shakeTimer = 0;
+
+    // Generate bridge (Host only decides, then broadcasts)
+    this.bridge = [];
+    this.revealed = [];
+    for (let i = 0; i < CB_ROWS; i++) {
+      this.bridge.push({ leftSafe: Math.random() < 0.5 });
+      this.revealed.push([false, false]);
+    }
+
+    ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
+    ctx.sync.on('stateChange', this.onStateChange);
+
+    if (ctx.isHost) {
+      this.broadcastState();
+    }
+
+    this.loop();
   }
-  destroy(): void { /* TODO */ }
+
+  // ── Pointer: Guest picks a tile ──
+  private onPointerDown = (e: PointerEvent) => {
+    if (this.gameOver || this.won) {
+      // Tap to restart
+      if (this.ctx.isHost) {
+        this.restart();
+        this.broadcastState();
+      }
+      return;
+    }
+
+    // Only Guest moves the avatar
+    if (this.ctx.isHost) return;
+
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const w = this.ctx.canvas.width;
+
+    // Left or right half?
+    const side: 'left' | 'right' = px < w / 2 ? 'left' : 'right';
+
+    this.ctx.sync.setState({
+      cbStep: { side, ts: Date.now(), by: this.ctx.me.id }
+    });
+  };
+
+  // ── Host processes steps ──
+  private processStep(side: 'left' | 'right') {
+    if (this.gameOver || this.won) return;
+
+    const nextRow = this.avatarRow + 1;
+
+    if (nextRow >= CB_ROWS) {
+      // Reached the end!
+      this.avatarRow = CB_ROWS;
+      this.won = true;
+      return;
+    }
+
+    this.avatarRow = nextRow;
+    this.avatarSide = side;
+    const sideIdx = side === 'left' ? 0 : 1;
+    this.revealed[nextRow][sideIdx] = true;
+
+    const safe = side === 'left' ? this.bridge[nextRow].leftSafe : !this.bridge[nextRow].leftSafe;
+
+    if (!safe) {
+      this.lives--;
+      this.shakeTimer = 20; // frames of screen shake
+      if (this.lives <= 0) {
+        this.gameOver = true;
+        // Reveal all tiles
+        for (let i = 0; i < CB_ROWS; i++) {
+          this.revealed[i] = [true, true];
+        }
+      } else {
+        // Stay on same row so player can try the other side
+        this.avatarRow = nextRow - 1;
+      }
+    }
+  }
+
+  private restart() {
+    this.gameOver = false;
+    this.won = false;
+    this.lives = CB_LIVES;
+    this.avatarRow = -1;
+    this.avatarSide = null;
+    this.shakeTimer = 0;
+    this.bridge = [];
+    this.revealed = [];
+    for (let i = 0; i < CB_ROWS; i++) {
+      this.bridge.push({ leftSafe: Math.random() < 0.5 });
+      this.revealed.push([false, false]);
+    }
+  }
+
+  // ── Sync ──
+  private broadcastState() {
+    this.ctx.sync.setState({
+      cbState: {
+        bridge: this.bridge.map(r => r.leftSafe),
+        revealed: this.revealed,
+        row: this.avatarRow,
+        side: this.avatarSide,
+        lives: this.lives,
+        over: this.gameOver,
+        won: this.won,
+        ts: Date.now()
+      }
+    });
+  }
+
+  private onStateChange = (state: any) => {
+    // Host receives step from guest
+    if (this.ctx.isHost && state.cbStep && state.cbStep.ts !== this.lastActionTs) {
+      this.lastActionTs = state.cbStep.ts;
+      if (state.cbStep.by !== this.ctx.me.id) {
+        this.processStep(state.cbStep.side);
+        this.broadcastState();
+      }
+    }
+
+    // Guest (and Host for mirror) receives authoritative state
+    if (state.cbState) {
+      // Guest always syncs; Host syncs bridge layout on first load
+      if (!this.ctx.isHost) {
+        this.avatarRow = state.cbState.row;
+        this.avatarSide = state.cbState.side;
+        this.lives = state.cbState.lives;
+        this.gameOver = state.cbState.over;
+        this.won = state.cbState.won;
+        this.revealed = state.cbState.revealed;
+        // Guest does NOT receive which tiles are safe — that's the asymmetry!
+        // Actually, we do receive bridge data but we won't RENDER it for the guest.
+        // We store it so the Host render path works:
+      }
+      // Both store bridge data (Host renders hints, Guest ignores them in draw)
+      if (state.cbState.bridge) {
+        for (let i = 0; i < CB_ROWS; i++) {
+          this.bridge[i] = { leftSafe: state.cbState.bridge[i] };
+        }
+      }
+      if (state.cbState.over || state.cbState.won) {
+        if (!this.ctx.isHost && state.cbState.over) {
+          this.shakeTimer = 20;
+        }
+      }
+    }
+  };
+
+  // ── Render ──
+  private loop = () => {
+    this.draw();
+    this.animId = requestAnimationFrame(this.loop);
+  };
+
+  private draw() {
+    const c = this.canvasCtx;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    // Screen shake
+    c.save();
+    if (this.shakeTimer > 0) {
+      this.shakeTimer--;
+      const sx = (Math.random() - 0.5) * 8;
+      const sy = (Math.random() - 0.5) * 8;
+      c.translate(sx, sy);
+    }
+
+    c.clearRect(-10, -10, w + 20, h + 20);
+
+    // Layout
+    const topPad = h * 0.08;
+    const botPad = h * 0.12;
+    const bridgeH = h - topPad - botPad;
+    const rowH = bridgeH / (CB_ROWS + 2); // +2 for start/finish platforms
+    const tileW = w * 0.35;
+    const tileH = rowH * 0.75;
+    const gapX = w * 0.06;
+    const leftX = w / 2 - gapX / 2 - tileW;
+    const rightX = w / 2 + gapX / 2;
+
+    // ── Role label ──
+    c.font = `bold ${w * 0.045}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    c.fillStyle = '#636e72';
+    c.fillText(
+      this.ctx.isHost ? '👁️ Tú ves las baldosas seguras' : '🚶 Tú mueves al personaje',
+      w / 2, topPad * 0.6
+    );
+
+    // ── Lives ──
+    c.font = `${w * 0.05}px 'Patrick Hand', cursive`;
+    c.textAlign = 'right';
+    c.fillStyle = '#2d3436';
+    c.fillText('❤️'.repeat(this.lives) + '🖤'.repeat(CB_LIVES - this.lives), w - 16, topPad * 0.6);
+
+    // ── Finish platform ──
+    const finishY = topPad;
+    c.fillStyle = '#55efc4';
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.roundRect(leftX, finishY, tileW * 2 + gapX, rowH * 0.8, 8);
+    c.fill();
+    c.stroke();
+    c.fillStyle = '#2d3436';
+    c.font = `bold ${rowH * 0.35}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText('🏁 META', w / 2, finishY + rowH * 0.4);
+
+    // ── Bridge tiles ──
+    for (let i = 0; i < CB_ROWS; i++) {
+      const tileY = topPad + (i + 1) * rowH + (rowH - tileH) / 2;
+      const rowData = this.bridge[i];
+
+      // Draw left tile
+      this.drawTile(c, leftX, tileY, tileW, tileH, i, 0, rowData.leftSafe);
+      // Draw right tile
+      this.drawTile(c, rightX, tileY, tileW, tileH, i, 1, !rowData.leftSafe);
+    }
+
+    // ── Start platform ──
+    const startY = topPad + (CB_ROWS + 1) * rowH;
+    c.fillStyle = '#74b9ff';
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.roundRect(leftX, startY, tileW * 2 + gapX, rowH * 0.8, 8);
+    c.fill();
+    c.stroke();
+    c.fillStyle = '#2d3436';
+    c.font = `bold ${rowH * 0.35}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    c.fillText('🚶 INICIO', w / 2, startY + rowH * 0.4);
+
+    // ── Avatar ──
+    if (!this.gameOver) {
+      let avatarX = w / 2;
+      let avatarY: number;
+
+      if (this.avatarRow === -1) {
+        avatarY = startY + rowH * 0.4;
+      } else if (this.avatarRow >= CB_ROWS) {
+        avatarY = finishY + rowH * 0.4;
+      } else {
+        const tileY = topPad + (this.avatarRow + 1) * rowH + rowH / 2;
+        avatarY = tileY;
+        if (this.avatarSide === 'left') avatarX = leftX + tileW / 2;
+        else if (this.avatarSide === 'right') avatarX = rightX + tileW / 2;
+      }
+
+      // Draw avatar (simple doodle person)
+      c.font = `${rowH * 0.55}px serif`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('🧍', avatarX, avatarY);
+    }
+
+    // ── Instructions for Guest ──
+    if (!this.ctx.isHost && !this.gameOver && !this.won) {
+      c.font = `${w * 0.04}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.fillStyle = '#636e72';
+      c.fillText('Toca izquierda o derecha para avanzar', w / 2, h - botPad * 0.4);
+    }
+
+    // ── Game Over / Win overlay ──
+    if (this.gameOver || this.won) {
+      c.fillStyle = 'rgba(253,251,247,0.8)';
+      c.fillRect(-10, -10, w + 20, h + 20);
+
+      c.fillStyle = '#2d3436';
+      c.font = `bold ${w * 0.14}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(this.won ? '🎉' : '💔', w / 2, h * 0.35);
+
+      c.font = `bold ${w * 0.07}px 'Patrick Hand', cursive`;
+      c.fillText(this.won ? '¡Cruzaron el puente!' : '¡Se rompió el cristal!', w / 2, h * 0.48);
+
+      c.font = `${w * 0.04}px 'Patrick Hand', cursive`;
+      c.fillStyle = '#636e72';
+      c.fillText('Toca para jugar de nuevo', w / 2, h * 0.58);
+    }
+
+    c.restore();
+  }
+
+  private drawTile(
+    c: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    rowIdx: number, sideIdx: number, isSafe: boolean
+  ) {
+    const wasRevealed = this.revealed[rowIdx]?.[sideIdx];
+
+    if (wasRevealed) {
+      if (isSafe) {
+        // Safe tile — solid glass
+        c.fillStyle = 'rgba(116, 185, 255, 0.3)';
+        c.strokeStyle = '#74b9ff';
+        c.lineWidth = 3;
+        c.beginPath();
+        c.roundRect(x, y, w, h, 6);
+        c.fill();
+        c.stroke();
+        // Checkmark
+        c.font = `bold ${h * 0.5}px 'Patrick Hand', cursive`;
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillStyle = '#00b894';
+        c.fillText('✓', x + w / 2, y + h / 2);
+      } else {
+        // Broken tile — shattered look
+        c.fillStyle = 'rgba(255, 118, 117, 0.15)';
+        c.strokeStyle = '#ff7675';
+        c.lineWidth = 2;
+        c.setLineDash([4, 4]);
+        c.beginPath();
+        c.roundRect(x, y, w, h, 6);
+        c.fill();
+        c.stroke();
+        c.setLineDash([]);
+        // Crack lines
+        c.strokeStyle = 'rgba(255,118,117,0.5)';
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(x + w * 0.2, y + h * 0.1);
+        c.lineTo(x + w * 0.5, y + h * 0.5);
+        c.lineTo(x + w * 0.3, y + h * 0.9);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(x + w * 0.5, y + h * 0.5);
+        c.lineTo(x + w * 0.8, y + h * 0.3);
+        c.stroke();
+        // X mark
+        c.font = `bold ${h * 0.4}px 'Patrick Hand', cursive`;
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillStyle = '#d63031';
+        c.fillText('✗', x + w / 2, y + h / 2);
+      }
+    } else {
+      // Unrevealed tile — both look identical to Guest
+      // Host sees a subtle hint
+      const isHostHint = this.ctx.isHost && isSafe;
+
+      c.fillStyle = isHostHint ? 'rgba(85, 239, 196, 0.18)' : 'rgba(200, 200, 200, 0.25)';
+      c.strokeStyle = '#2d3436';
+      c.lineWidth = 2.5;
+      c.beginPath();
+      c.roundRect(x, y, w, h, 6);
+      c.fill();
+      c.stroke();
+
+      // Glass sheen effect
+      c.strokeStyle = 'rgba(255,255,255,0.5)';
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.moveTo(x + w * 0.15, y + h * 0.2);
+      c.lineTo(x + w * 0.35, y + h * 0.2);
+      c.stroke();
+      c.beginPath();
+      c.moveTo(x + w * 0.15, y + h * 0.35);
+      c.lineTo(x + w * 0.25, y + h * 0.35);
+      c.stroke();
+
+      // Host sees a tiny green dot
+      if (isHostHint) {
+        c.fillStyle = 'rgba(0, 184, 148, 0.6)';
+        c.beginPath();
+        c.arc(x + w - 10, y + 10, 4, 0, Math.PI * 2);
+        c.fill();
+      }
+
+      // Label
+      c.font = `${h * 0.3}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillStyle = '#b2bec3';
+      c.fillText(sideIdx === 0 ? '◀' : '▶', x + w / 2, y + h / 2);
+    }
+  }
+
+  destroy(): void {
+    cancelAnimationFrame(this.animId);
+    this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.ctx.sync.off('stateChange', this.onStateChange);
+  }
 }
 
 // ─────────────────────────────────────────────────────────
