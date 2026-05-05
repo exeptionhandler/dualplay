@@ -9,7 +9,7 @@
  * Real logic will be filled in Fase 2, one game at a time.
  */
 
-import type { Sync } from '@robojs/sync';
+import type { Sync } from './sync';
 
 export interface GameContext {
   canvas: HTMLCanvasElement;

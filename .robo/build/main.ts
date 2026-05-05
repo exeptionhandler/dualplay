@@ -1,5 +1,5 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
-import { Sync } from '@robojs/sync';
+import { Sync } from './sync';
 import { renderLobby, renderGameView, showToast } from './ui';
 import type { GameId } from './types';
 import { GAME_MODULES } from './games';
