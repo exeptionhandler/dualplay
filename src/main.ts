@@ -102,9 +102,14 @@ function goGame(gameId: GameId): void {
   const mod = GAME_MODULES[gameId]?.();
   if (mod) {
     currentGame = mod;
-    // We would pass 'host'/'guest' based on voice channel ownership or first join
-    mod.init(canvas, 'host', (msg) => {
-      sync.setState({ lastMessage: msg });
+    // First user to join the lobby becomes host, or just whoever has the smallest ID
+    const isHost = participants.length > 0 && participants[0].id === me.id;
+
+    mod.init({
+      canvas,
+      sync,
+      me,
+      isHost
     });
     showToast(`${entry.emoji} ${entry.name} cargado`);
   }
