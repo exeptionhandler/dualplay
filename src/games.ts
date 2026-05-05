@@ -1532,11 +1532,263 @@ export class CrystalBridgeGame implements GameModule {
 //   Star positions broadcast by host:
 //   payload: { stars: Array<{ id, x, y, vel }> }
 // ─────────────────────────────────────────────────────────
+interface Star {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  hue: number;
+}
+
+interface StarTap {
+  id: string;
+  ts: number;
+  by: string;
+}
+
+const SF_STAR_COUNT = 5;
+const SF_COORDINATION_WINDOW = 250; // ms
+
 export class StarFishingGame implements GameModule {
-  init(_ctx: GameContext): void {
-    console.log('[StarFishingGame] stub — Fase 2');
+  private ctx!: GameContext;
+  private animId = 0;
+  private canvasCtx!: CanvasRenderingContext2D;
+
+  private stars: Star[] = [];
+  private score = 0;
+  private lastTaps: Record<string, StarTap> = {}; // starId -> last tap data
+  private feedback: { x: number, y: number, text: string, timer: number }[] = [];
+  private lastSyncTs = 0;
+
+  init(ctx: GameContext): void {
+    this.ctx = ctx;
+    this.canvasCtx = ctx.canvas.getContext('2d')!;
+    this.score = 0;
+    this.stars = [];
+    this.feedback = [];
+
+    ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
+    ctx.sync.on('stateChange', this.onStateChange);
+
+    if (ctx.isHost) {
+      for (let i = 0; i < SF_STAR_COUNT; i++) {
+        this.stars.push(this.createStar());
+      }
+      this.broadcastState();
+    }
+
+    this.loop();
   }
-  destroy(): void { /* TODO */ }
+
+  private createStar(): Star {
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+    return {
+      id: Math.random().toString(36).substring(2, 9),
+      x: Math.random() * w,
+      y: Math.random() * h,
+      vx: (Math.random() - 0.5) * 2,
+      vy: (Math.random() - 0.5) * 2,
+      size: 25 + Math.random() * 15,
+      hue: Math.random() * 360
+    };
+  }
+
+  private onPointerDown = (e: PointerEvent) => {
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    // Check collisions with stars
+    for (const star of this.stars) {
+      const dx = px - star.x;
+      const dy = py - star.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < star.size * 1.5) {
+        // Tap hit!
+        this.ctx.sync.setState({
+          sfTap: { id: star.id, ts: Date.now(), by: this.ctx.me.id }
+        });
+        // Visual feedback for local player
+        this.addFeedback(star.x, star.y, '✨');
+        break;
+      }
+    }
+  };
+
+  private addFeedback(x: number, y: number, text: string) {
+    this.feedback.push({ x, y, text, timer: 30 });
+  }
+
+  private onStateChange = (state: any) => {
+    if (this.ctx.isHost && state.sfTap && state.sfTap.ts !== this.lastSyncTs) {
+      this.lastSyncTs = state.sfTap.ts;
+      this.processTap(state.sfTap);
+    }
+
+    if (!this.ctx.isHost && state.sfState) {
+      this.stars = state.sfState.stars;
+      this.score = state.sfState.score;
+      if (state.sfState.hit) {
+        this.addFeedback(state.sfState.hit.x, state.sfState.hit.y, '¡PESCADA! ⭐');
+      }
+    }
+  };
+
+  private processTap(tap: StarTap) {
+    const existing = this.lastTaps[tap.id];
+    
+    if (existing && existing.by !== tap.by) {
+      const diff = Math.abs(tap.ts - existing.ts);
+      if (diff < SF_COORDINATION_WINDOW) {
+        // SUCCESS! Coordination achieved
+        this.score++;
+        // Remove star and replace
+        const idx = this.stars.findIndex(s => s.id === tap.id);
+        if (idx !== -1) {
+          const hitX = this.stars[idx].x;
+          const hitY = this.stars[idx].y;
+          this.stars.splice(idx, 1);
+          this.stars.push(this.createStar());
+          delete this.lastTaps[tap.id];
+          
+          this.broadcastState({ x: hitX, y: hitY });
+          return;
+        }
+      }
+    }
+    
+    // Store tap for future coordination
+    this.lastTaps[tap.id] = tap;
+  }
+
+  private broadcastState(hit?: { x: number, y: number }) {
+    this.ctx.sync.setState({
+      sfState: {
+        stars: this.stars,
+        score: this.score,
+        hit,
+        ts: Date.now()
+      }
+    });
+  }
+
+  private loop = () => {
+    this.update();
+    this.draw();
+    this.animId = requestAnimationFrame(this.loop);
+  };
+
+  private update() {
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    if (this.ctx.isHost) {
+      for (const star of this.stars) {
+        star.x += star.vx;
+        star.y += star.vy;
+
+        // Bounce
+        if (star.x < 0 || star.x > w) star.vx *= -1;
+        if (star.y < 0 || star.y > h) star.vy *= -1;
+      }
+      
+      // Periodic sync of positions
+      if (Math.random() < 0.05) this.broadcastState();
+    }
+
+    // Update feedback
+    for (let i = this.feedback.length - 1; i >= 0; i--) {
+      this.feedback[i].timer--;
+      this.feedback[i].y -= 1;
+      if (this.feedback[i].timer <= 0) this.feedback.splice(i, 1);
+    }
+  }
+
+  private draw() {
+    const c = this.canvasCtx;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    c.clearRect(0, 0, w, h);
+
+    // Score
+    c.font = `bold ${w * 0.06}px 'Patrick Hand', cursive`;
+    c.fillStyle = '#2d3436';
+    c.textAlign = 'center';
+    c.fillText(`Estrellas Pescadas: ${this.score}`, w / 2, 50);
+
+    // Stars
+    for (const star of this.stars) {
+      this.drawStar(c, star.x, star.y, star.size, star.hue);
+    }
+
+    // Feedback
+    c.font = `bold ${w * 0.05}px 'Patrick Hand', cursive`;
+    for (const f of this.feedback) {
+      c.globalAlpha = f.timer / 30;
+      c.fillText(f.text, f.x, f.y);
+    }
+    c.globalAlpha = 1;
+
+    // Instructions
+    c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
+    c.fillStyle = '#636e72';
+    c.fillText('¡Toquen la misma estrella al mismo tiempo!', w / 2, h - 30);
+  }
+
+  private drawStar(c: CanvasRenderingContext2D, cx: number, cy: number, size: number, hue: number) {
+    c.save();
+    c.translate(cx, cy);
+    c.rotate(Date.now() * 0.002);
+    
+    c.beginPath();
+    const spikes = 5;
+    const outerRadius = size;
+    const innerRadius = size * 0.4;
+    let rot = Math.PI / 2 * 3;
+    let x = 0;
+    let y = 0;
+    const step = Math.PI / spikes;
+
+    c.moveTo(0, -outerRadius);
+    for (let i = 0; i < spikes; i++) {
+      x = Math.cos(rot) * outerRadius;
+      y = Math.sin(rot) * outerRadius;
+      c.lineTo(x, y);
+      rot += step;
+
+      x = Math.cos(rot) * innerRadius;
+      y = Math.sin(rot) * innerRadius;
+      c.lineTo(x, y);
+      rot += step;
+    }
+    c.lineTo(0, -outerRadius);
+    c.closePath();
+
+    c.fillStyle = `hsla(${hue}, 80%, 70%, 0.6)`;
+    c.fill();
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 2.5;
+    c.stroke();
+    
+    // Doodle lines inside
+    c.beginPath();
+    c.moveTo(0,0);
+    c.lineTo(0, -outerRadius * 0.5);
+    c.stroke();
+
+    c.restore();
+  }
+
+  destroy(): void {
+    cancelAnimationFrame(this.animId);
+    this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.ctx.sync.off('stateChange', this.onStateChange);
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1549,11 +1801,284 @@ export class StarFishingGame implements GameModule {
 //   Guest (P2) sends on jump/shield:
 //   payload: { action: 'jump' | 'shield' }
 // ─────────────────────────────────────────────────────────
+interface Obstacle {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const IG_SCROLL_SPEED = 4;
+const IG_GRAVITY = 0.6;
+const IG_LIVES = 3;
+
 export class InverseGravityGame implements GameModule {
-  init(_ctx: GameContext): void {
-    console.log('[InverseGravityGame] stub — Fase 2');
+  private ctx!: GameContext;
+  private animId = 0;
+  private canvasCtx!: CanvasRenderingContext2D;
+
+  private obstacles: Obstacle[] = [];
+  private playerY = 0;
+  private playerVY = 0;
+  private gravityDir = 1; // 1 = down, -1 = up
+  private lives = IG_LIVES;
+  private shieldActive = false;
+  private shieldTimer = 0;
+  private gameOver = false;
+  private distance = 0;
+  private lastActionTs = 0;
+
+  init(ctx: GameContext): void {
+    this.ctx = ctx;
+    this.canvasCtx = ctx.canvas.getContext('2d')!;
+    this.reset();
+
+    ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
+    ctx.sync.on('stateChange', this.onStateChange);
+
+    if (ctx.isHost) {
+      this.broadcastState();
+    }
+
+    this.loop();
   }
-  destroy(): void { /* TODO */ }
+
+  private reset() {
+    this.obstacles = [];
+    this.playerY = this.ctx.canvas.height / 2;
+    this.playerVY = 0;
+    this.gravityDir = 1;
+    this.lives = IG_LIVES;
+    this.shieldActive = false;
+    this.shieldTimer = 0;
+    this.gameOver = false;
+    this.distance = 0;
+  }
+
+  private onPointerDown = () => {
+    if (this.gameOver) {
+      if (this.ctx.isHost) {
+        this.reset();
+        this.broadcastState();
+      }
+      return;
+    }
+
+    // Host flips gravity, Guest shields
+    if (this.ctx.isHost) {
+      this.gravityDir *= -1;
+      this.ctx.sync.setState({ igFlip: { dir: this.gravityDir, ts: Date.now() } });
+    } else {
+      if (this.shieldTimer <= 0) {
+        this.shieldActive = true;
+        this.shieldTimer = 100; // frames
+        this.ctx.sync.setState({ igShield: { active: true, ts: Date.now() } });
+      }
+    }
+  };
+
+  private onStateChange = (state: any) => {
+    if (this.ctx.isHost && state.igShield && state.igShield.ts !== this.lastActionTs) {
+      this.lastActionTs = state.igShield.ts;
+      this.shieldActive = true;
+      this.shieldTimer = 100;
+      this.broadcastState();
+    }
+    
+    if (!this.ctx.isHost) {
+      if (state.igFlip) this.gravityDir = state.igFlip.dir;
+      if (state.igState) {
+        this.obstacles = state.igState.obs;
+        this.lives = state.igState.lives;
+        this.distance = state.igState.dist;
+        this.playerY = state.igState.y;
+        this.gameOver = state.igState.over;
+        this.shieldActive = state.igState.shield;
+      }
+    }
+  };
+
+  private broadcastState() {
+    this.ctx.sync.setState({
+      igState: {
+        obs: this.obstacles,
+        lives: this.lives,
+        dist: Math.floor(this.distance),
+        y: this.playerY,
+        over: this.gameOver,
+        shield: this.shieldActive,
+        ts: Date.now()
+      }
+    });
+  }
+
+  private loop = () => {
+    this.update();
+    this.draw();
+    this.animId = requestAnimationFrame(this.loop);
+  };
+
+  private update() {
+    if (this.gameOver) return;
+
+    const h = this.ctx.canvas.height;
+    const w = this.ctx.canvas.width;
+
+    if (this.ctx.isHost) {
+      // Physics
+      this.playerVY += IG_GRAVITY * this.gravityDir;
+      this.playerY += this.playerVY;
+
+      // Floor/Ceiling constraints
+      const margin = 40;
+      if (this.playerY > h - margin) {
+        this.playerY = h - margin;
+        this.playerVY = 0;
+      }
+      if (this.playerY < margin) {
+        this.playerY = margin;
+        this.playerVY = 0;
+      }
+
+      // Scrolling
+      this.distance += 0.1;
+      
+      // Spawn obstacles
+      if (Math.random() < 0.02) {
+        const side = Math.random() < 0.5 ? 'top' : 'bottom';
+        this.obstacles.push({
+          x: w,
+          y: side === 'top' ? 0 : h - 60,
+          w: 40 + Math.random() * 40,
+          h: 60
+        });
+      }
+
+      // Update obstacles & Collisions
+      for (let i = this.obstacles.length - 1; i >= 0; i--) {
+        const obs = this.obstacles[i];
+        obs.x -= IG_SCROLL_SPEED;
+
+        // Collision
+        if (!this.shieldActive && 
+            w * 0.2 < obs.x + obs.w && 
+            w * 0.2 + 30 > obs.x && 
+            this.playerY < obs.y + obs.h && 
+            this.playerY + 30 > obs.y) {
+          
+          this.lives--;
+          this.obstacles.splice(i, 1);
+          if (this.lives <= 0) this.gameOver = true;
+          continue;
+        }
+
+        if (obs.x + obs.w < 0) this.obstacles.splice(i, 1);
+      }
+
+      if (this.shieldTimer > 0) {
+        this.shieldTimer--;
+        if (this.shieldTimer <= 0) this.shieldActive = false;
+      }
+
+      if (Math.random() < 0.1) this.broadcastState();
+    }
+  }
+
+  private draw() {
+    const c = this.canvasCtx;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    c.clearRect(0, 0, w, h);
+
+    // Grid lines (doodle style)
+    c.strokeStyle = 'rgba(0,0,0,0.05)';
+    c.lineWidth = 1;
+    for (let x = 0; x < w; x += 50) {
+      c.beginPath(); c.moveTo(x - (this.distance * 10) % 50, 0); c.lineTo(x - (this.distance * 10) % 50, h); c.stroke();
+    }
+
+    // HUD
+    c.font = `bold ${w * 0.05}px 'Patrick Hand', cursive`;
+    c.fillStyle = '#2d3436';
+    c.textAlign = 'left';
+    c.fillText(`❤️`.repeat(this.lives), 20, 40);
+    c.textAlign = 'right';
+    c.fillText(`${Math.floor(this.distance)}m`, w - 20, 40);
+
+    // Player (Doodle stick figure)
+    const px = w * 0.2;
+    const py = this.playerY;
+    
+    c.save();
+    c.translate(px, py);
+    if (this.gravityDir === -1) c.scale(1, -1);
+    
+    // Head
+    c.beginPath(); c.arc(0, -15, 6, 0, Math.PI * 2); c.stroke();
+    // Body
+    c.beginPath(); c.moveTo(0, -9); c.lineTo(0, 5); c.stroke();
+    // Arms
+    c.beginPath(); c.moveTo(-10, -5); c.lineTo(10, -5); c.stroke();
+    // Legs
+    c.beginPath(); c.moveTo(0, 5); c.lineTo(-7, 15); c.stroke();
+    c.beginPath(); c.moveTo(0, 5); c.lineTo(7, 15); c.stroke();
+    
+    c.restore();
+
+    // Shield effect
+    if (this.shieldActive) {
+      c.beginPath();
+      c.arc(px, py, 35, 0, Math.PI * 2);
+      c.strokeStyle = 'rgba(116, 185, 255, 0.6)';
+      c.lineWidth = 5;
+      c.stroke();
+    }
+
+    // Obstacles
+    c.fillStyle = '#2d3436';
+    for (const obs of this.obstacles) {
+      this.drawObstacle(c, obs.x, obs.y, obs.w, obs.h);
+    }
+
+    // Game Over
+    if (this.gameOver) {
+      c.fillStyle = 'rgba(253,251,247,0.85)';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#2d3436';
+      c.font = `bold ${w * 0.1}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.fillText('¡CAÍDA LIBRE!', w / 2, h / 2);
+      c.font = `${w * 0.05}px 'Patrick Hand', cursive`;
+      c.fillText('Toca para reintentar', w / 2, h / 2 + 50);
+    }
+
+    // Role labels
+    c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
+    c.fillStyle = '#636e72';
+    c.textAlign = 'center';
+    c.fillText(this.ctx.isHost ? 'Host: Toca para invertir gravedad' : 'Guest: Toca para activar escudo', w / 2, h - 20);
+  }
+
+  private drawObstacle(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 2.5;
+    c.strokeRect(x, y, w, h);
+    
+    // Scribble fill
+    for (let i = 0; i < w; i += 8) {
+      c.beginPath();
+      c.moveTo(x + i, y);
+      c.lineTo(x + i + 5, y + h);
+      c.stroke();
+    }
+  }
+
+  destroy(): void {
+    cancelAnimationFrame(this.animId);
+    this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.ctx.sync.off('stateChange', this.onStateChange);
+  }
 }
 
 // ─────────────────────────────────────────────────────────
