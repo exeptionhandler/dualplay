@@ -83,21 +83,21 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
   const tagClass = (t: GameEntry['tag']) => 'game-tag tag-' + t;
 
   const getAvatarUrl = (p: any) => {
-    if (p.avatar) return \`https://cdn.discordapp.com/avatars/\${p.id}/\${p.avatar}.png\`;
+    if (p.avatar) return `https://cdn.discordapp.com/avatars/${p.id}/${p.avatar}.png`;
     return 'https://cdn.discordapp.com/embed/avatars/0.png'; // Default
   };
 
-  setView(\`
+  setView(`
     <div class="view" id="screen-lobby" style="padding:0;justify-content:flex-start">
       <!-- Header with Avatars -->
       <div class="lobby-header">
         <div class="logo-title" style="font-size:2rem;margin-bottom:0">DuoPlay</div>
         <div class="lobby-players">
-          \${participants.map((p, i) => \`
-            <div class="player-avatar-wrap" style="--rot: \${i % 2 === 0 ? 3 : -4}" title="\${p.username}">
-              <img src="\${getAvatarUrl(p)}" alt="\${p.username}" />
+          ${participants.map((p, i) => `
+            <div class="player-avatar-wrap" style="--rot: ${i % 2 === 0 ? 3 : -4}" title="${p.username}">
+              <img src="${getAvatarUrl(p)}" alt="${p.username}" />
             </div>
-          \`).join('')}
+          `).join('')}
         </div>
       </div>
 
@@ -105,20 +105,20 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
       <div class="lobby-content">
         <div class="section-title">Elige un minijuego:</div>
         <div class="games-grid">
-          \${GAMES.map(g => \`
-            <div class="game-card" data-game="\${g.id}" tabindex="0" role="button">
-              <div class="game-emoji">\${g.emoji}</div>
+          ${GAMES.map(g => `
+            <div class="game-card" data-game="${g.id}" tabindex="0" role="button">
+              <div class="game-emoji">${g.emoji}</div>
               <div class="game-info">
-                <div class="game-name">\${g.name}</div>
-                <div class="game-desc">\${g.desc}</div>
+                <div class="game-name">${g.name}</div>
+                <div class="game-desc">${g.desc}</div>
               </div>
-              <div class="\${tagClass(g.tag)}">\${g.tagLabel}</div>
+              <div class="${tagClass(g.tag)}">${g.tagLabel}</div>
             </div>
-          \`).join('')}
+          `).join('')}
         </div>
       </div>
     </div>
-  \`);
+  `);
 
   // Game selection
   document.querySelectorAll('.game-card').forEach(card => {
@@ -141,17 +141,17 @@ export interface GameViewCallbacks {
 }
 
 export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCanvasElement {
-  setView(\`
+  setView(`
     <div class="view game-view" id="screen-game">
       <div class="game-topbar">
         <button class="btn btn-secondary btn-back" id="btn-back-lobby">← Volver</button>
-        <div class="game-topbar-title">\${game.emoji} \${game.name}</div>
+        <div class="game-topbar-title">${game.emoji} ${game.name}</div>
       </div>
       <div class="game-canvas-area" id="canvas-area">
         <canvas id="game-canvas"></canvas>
       </div>
     </div>
-  \`);
+  `);
 
   const area = document.getElementById('canvas-area')!;
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -167,16 +167,16 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCan
   const drawPlaceholder = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    ctx.font = \`\${Math.min(canvas.width, canvas.height) * 0.2}px 'Patrick Hand'\`;
+    ctx.font = `${Math.min(canvas.width, canvas.height) * 0.2}px 'Patrick Hand'`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(game.emoji, canvas.width / 2, canvas.height / 2 - 30);
 
-    ctx.font = \`30px 'Patrick Hand', cursive\`;
+    ctx.font = `30px 'Patrick Hand', cursive`;
     ctx.fillStyle = 'var(--ink-primary)';
     ctx.fillText(game.name, canvas.width / 2, canvas.height / 2 + 40);
 
-    ctx.font = \`20px 'Patrick Hand', cursive\`;
+    ctx.font = `20px 'Patrick Hand', cursive`;
     ctx.fillStyle = 'var(--ink-secondary)';
     ctx.fillText('(Próximamente en Fase 2)', canvas.width / 2, canvas.height / 2 + 75);
   };

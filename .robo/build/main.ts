@@ -44,10 +44,9 @@ async function init() {
     });
 
     // 3. Get current user & participants
-    me = await fetch(\`https://discord.com/api/users/@me\`, {
-      headers: { Authorization: \`Bearer \${authResult.access_token}\` }
+    me = await fetch(`https://discord.com/api/users/@me`, {
+      headers: { Authorization: `Bearer ${authResult.access_token}` }
     }).then(res => res.json()).catch(() => ({ id: '1', username: 'HostUser', avatar: null }));
-
     participants = [me]; // In a real app, listen to SPEAKING / voice events or use Robo Sync for presence.
 
     // 4. Initialize Robo Sync
@@ -107,7 +106,7 @@ function goGame(gameId: GameId): void {
     mod.init(canvas, 'host', (msg) => {
       sync.setState({ lastMessage: msg });
     });
-    showToast(\`\${entry.emoji} \${entry.name} cargado\`);
+    showToast(`${entry.emoji} ${entry.name} cargado`);
   }
 }
 
