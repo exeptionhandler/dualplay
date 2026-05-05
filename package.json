@@ -9,7 +9,7 @@
     "start": "robo start"
   },
   "devDependencies": {
-    "typescript": "~6.0.2",
+    "typescript": "^5.4.5",
     "vite": "^8.0.10"
   },
   "dependencies": {
