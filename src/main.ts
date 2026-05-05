@@ -17,9 +17,17 @@ let participants: any[] = [];
 
 // ── Boot ───────────────────────────────────────────────
 async function init() {
+  const app = document.getElementById('app')!;
+  app.innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;font-size:2rem;color:var(--ink-secondary);">Conectando con Discord...</div>';
+
   try {
-    // 1. Wait for Discord SDK to be ready
-    await discordSdk.ready();
+    // 1. Wait for Discord SDK to be ready (with timeout)
+    await Promise.race([
+      discordSdk.ready(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Discord SDK timeout')), 5000))
+    ]);
+
+    app.innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;font-size:2rem;color:var(--ink-secondary);">Autorizando...</div>';
 
     // 2. Authorize
     const { code } = await discordSdk.commands.authorize({
@@ -30,9 +38,7 @@ async function init() {
       scope: ['identify', 'rpc.voice.read'],
     });
 
-    // Note: In a real app, you would exchange this code for an access token via your backend.
-    // For this prototype, we'll authenticate directly if possible, or mock the user.
-    // Assuming Robo.js backend handles the token exchange if configured, but for client-side:
+    // 3. Authenticate
     const authResult = await fetch('/api/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -43,13 +49,12 @@ async function init() {
       access_token: authResult.access_token,
     });
 
-    // 3. Get current user & participants
+    // 4. Get current user & initialize Sync
     me = await fetch(`https://discord.com/api/users/@me`, {
       headers: { Authorization: `Bearer ${authResult.access_token}` }
     }).then(res => res.json()).catch(() => ({ id: '1', username: 'HostUser', avatar: null }));
-    participants = [me]; // In a real app, listen to SPEAKING / voice events or use Robo Sync for presence.
+    participants = [me];
 
-    // 4. Initialize Robo Sync
     await sync.init({
       channelId: discordSdk.channelId,
       userId: me.id,
@@ -64,11 +69,23 @@ async function init() {
     });
 
     goLobby();
-  } catch (e) {
-    console.error(e);
-    // Fallback to local dev lobby if not in Discord
+  } catch (e: any) {
+    console.error('Init Error:', e);
+    // Fallback to local dev lobby if not in Discord or if error occurs
     me = { id: 'local_user', username: 'DevUser', avatar: null };
     participants = [me];
+    
+    // Fallback sync init for local dev
+    await sync.init({ channelId: 'local', userId: me.id });
+    
+    sync.on('stateChange', (state: any) => {
+      if (state.navigate && state.navigate !== 'lobby') {
+        goGame(state.navigate);
+      } else if (state.navigate === 'lobby') {
+        goLobby();
+      }
+    });
+
     goLobby();
   }
 }
