@@ -1566,11 +1566,482 @@ export class InverseGravityGame implements GameModule {
 //   Each player sends their mallet position on touch move:
 //   payload: { mallet: { x, y } }
 // ─────────────────────────────────────────────────────────
+// ── Hockey Constants ──
+const FH_MALLET_R = 28;
+const FH_PUCK_R = 16;
+const FH_MAX_SPEED = 14;
+const FH_FRICTION = 0.985;
+const FH_AI_SPEED = 3.5;
+const FH_GOAL_W_RATIO = 0.4; // goal width as fraction of canvas width
+
+interface Vec2 { x: number; y: number; }
+interface Disc extends Vec2 { vx: number; vy: number; r: number; }
+
 export class FingerHockeyGame implements GameModule {
-  init(_ctx: GameContext): void {
-    console.log('[FingerHockeyGame] stub — Fase 2');
+  private ctx!: GameContext;
+  private animId = 0;
+  private canvasCtx!: CanvasRenderingContext2D;
+
+  // Discs
+  private puck: Disc = { x: 0, y: 0, vx: 0, vy: 0, r: FH_PUCK_R };
+  private p1Mallet: Vec2 = { x: 0, y: 0 }; // Host's mallet (bottom-left)
+  private p2Mallet: Vec2 = { x: 0, y: 0 }; // Guest's mallet (bottom-right)
+  private ai1: Vec2 = { x: 0, y: 0 };       // AI mallet 1 (top-left)
+  private ai2: Vec2 = { x: 0, y: 0 };       // AI mallet 2 (top-right)
+
+  // Previous mallet positions for velocity calc
+  private p1Prev: Vec2 = { x: 0, y: 0 };
+  private p2Prev: Vec2 = { x: 0, y: 0 };
+
+  // Score
+  private scoreHumans = 0;
+  private scoreAI = 0;
+  private maxScore = 5;
+  private goalFlashTimer = 0;
+  private goalMessage = '';
+
+  // Pointer tracking
+  private activePointer: number | null = null;
+  private lastMalletTs = 0;
+  private syncInterval: ReturnType<typeof setInterval> | null = null;
+
+  init(ctx: GameContext): void {
+    this.ctx = ctx;
+    this.canvasCtx = ctx.canvas.getContext('2d')!;
+    this.scoreHumans = 0;
+    this.scoreAI = 0;
+    this.goalFlashTimer = 0;
+
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+
+    // Initial positions
+    this.resetPuck(w, h);
+    this.p1Mallet = { x: w * 0.3, y: h * 0.8 };
+    this.p2Mallet = { x: w * 0.7, y: h * 0.8 };
+    this.ai1 = { x: w * 0.35, y: h * 0.18 };
+    this.ai2 = { x: w * 0.65, y: h * 0.18 };
+    this.p1Prev = { ...this.p1Mallet };
+    this.p2Prev = { ...this.p2Mallet };
+
+    ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
+    ctx.canvas.addEventListener('pointermove', this.onPointerMove);
+    ctx.canvas.addEventListener('pointerup', this.onPointerUp);
+    ctx.canvas.addEventListener('pointercancel', this.onPointerUp);
+
+    ctx.sync.on('stateChange', this.onStateChange);
+
+    // Host broadcasts physics state periodically
+    if (ctx.isHost) {
+      this.syncInterval = setInterval(() => {
+        this.broadcastState();
+      }, 50); // 20 times/sec
+    }
+
+    this.loop();
   }
-  destroy(): void { /* TODO */ }
+
+  private resetPuck(w: number, h: number) {
+    this.puck.x = w / 2;
+    this.puck.y = h / 2;
+    this.puck.vx = (Math.random() - 0.5) * 4;
+    this.puck.vy = (Math.random() < 0.5 ? -1 : 1) * 3;
+  }
+
+  // ── Pointer handlers: each player drags their own mallet ──
+  private onPointerDown = (e: PointerEvent) => {
+    this.handlePointer(e);
+  };
+
+  private onPointerMove = (e: PointerEvent) => {
+    this.handlePointer(e);
+  };
+
+  private onPointerUp = (_e: PointerEvent) => {
+    // Nothing special needed
+  };
+
+  private handlePointer(e: PointerEvent) {
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const h = this.ctx.canvas.height;
+    const w = this.ctx.canvas.width;
+
+    // Only allow controlling mallets in the bottom half
+    if (py < h * 0.45) return;
+
+    // Clamp to playable area
+    const cx = Math.max(FH_MALLET_R, Math.min(w - FH_MALLET_R, px));
+    const cy = Math.max(h * 0.45, Math.min(h - FH_MALLET_R, py));
+
+    // Host controls p1 (bottom-left area), Guest controls p2 (bottom-right area)
+    if (this.ctx.isHost) {
+      this.p1Prev = { ...this.p1Mallet };
+      this.p1Mallet = { x: cx, y: cy };
+    } else {
+      // Send mallet pos to host
+      this.ctx.sync.setState({
+        fhMallet: { x: cx, y: cy, ts: Date.now(), by: this.ctx.me.id }
+      });
+      // Local prediction
+      this.p2Prev = { ...this.p2Mallet };
+      this.p2Mallet = { x: cx, y: cy };
+    }
+  }
+
+  // ── AI Logic ──
+  private updateAI(w: number, h: number) {
+    const topLimit = FH_MALLET_R + 8;
+    const botLimit = h * 0.45;
+
+    // AI1: tracks puck with some lag, stays on left side
+    const targetX1 = Math.max(FH_MALLET_R, Math.min(w * 0.48, this.puck.x - 30));
+    const targetY1 = Math.max(topLimit, Math.min(botLimit, this.puck.y < botLimit ? this.puck.y : h * 0.15));
+    this.ai1.x += (targetX1 - this.ai1.x) * 0.06 * FH_AI_SPEED * 0.3;
+    this.ai1.y += (targetY1 - this.ai1.y) * 0.05 * FH_AI_SPEED * 0.3;
+
+    // AI2: tracks puck more aggressively, stays on right side
+    const targetX2 = Math.max(w * 0.52, Math.min(w - FH_MALLET_R, this.puck.x + 30));
+    const targetY2 = Math.max(topLimit, Math.min(botLimit, this.puck.y < botLimit ? this.puck.y : h * 0.22));
+    this.ai2.x += (targetX2 - this.ai2.x) * 0.07 * FH_AI_SPEED * 0.3;
+    this.ai2.y += (targetY2 - this.ai2.y) * 0.06 * FH_AI_SPEED * 0.3;
+  }
+
+  // ── Physics ──
+  private resolveMalletCollision(mallet: Vec2, prevMallet: Vec2) {
+    const dx = this.puck.x - mallet.x;
+    const dy = this.puck.y - mallet.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const minDist = FH_MALLET_R + FH_PUCK_R;
+
+    if (dist < minDist && dist > 0) {
+      // Push puck out
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const overlap = minDist - dist;
+      this.puck.x += nx * overlap;
+      this.puck.y += ny * overlap;
+
+      // Transfer mallet velocity to puck
+      const mvx = mallet.x - prevMallet.x;
+      const mvy = mallet.y - prevMallet.y;
+      this.puck.vx = nx * 8 + mvx * 0.6;
+      this.puck.vy = ny * 8 + mvy * 0.6;
+    }
+  }
+
+  private resolveAICollision(ai: Vec2) {
+    const dx = this.puck.x - ai.x;
+    const dy = this.puck.y - ai.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const minDist = FH_MALLET_R + FH_PUCK_R;
+
+    if (dist < minDist && dist > 0) {
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const overlap = minDist - dist;
+      this.puck.x += nx * overlap;
+      this.puck.y += ny * overlap;
+      this.puck.vx = nx * 6;
+      this.puck.vy = ny * 6;
+    }
+  }
+
+  private update() {
+    if (!this.ctx.isHost) return; // Only host runs physics
+
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    if (this.goalFlashTimer > 0) {
+      this.goalFlashTimer--;
+      if (this.goalFlashTimer === 0) {
+        this.resetPuck(w, h);
+      }
+      return; // Pause physics during goal flash
+    }
+
+    // AI
+    this.updateAI(w, h);
+
+    // Puck movement
+    this.puck.x += this.puck.vx;
+    this.puck.y += this.puck.vy;
+    this.puck.vx *= FH_FRICTION;
+    this.puck.vy *= FH_FRICTION;
+
+    // Clamp speed
+    const speed = Math.sqrt(this.puck.vx ** 2 + this.puck.vy ** 2);
+    if (speed > FH_MAX_SPEED) {
+      this.puck.vx = (this.puck.vx / speed) * FH_MAX_SPEED;
+      this.puck.vy = (this.puck.vy / speed) * FH_MAX_SPEED;
+    }
+
+    // Wall bounces (left/right)
+    if (this.puck.x - FH_PUCK_R < 0) {
+      this.puck.x = FH_PUCK_R;
+      this.puck.vx = Math.abs(this.puck.vx) * 0.8;
+    }
+    if (this.puck.x + FH_PUCK_R > w) {
+      this.puck.x = w - FH_PUCK_R;
+      this.puck.vx = -Math.abs(this.puck.vx) * 0.8;
+    }
+
+    // Goal detection
+    const goalW = w * FH_GOAL_W_RATIO;
+    const goalLeft = (w - goalW) / 2;
+    const goalRight = goalLeft + goalW;
+
+    // Top goal (AI's goal — humans score here)
+    if (this.puck.y - FH_PUCK_R < 0) {
+      if (this.puck.x > goalLeft && this.puck.x < goalRight) {
+        this.scoreHumans++;
+        this.goalFlashTimer = 60;
+        this.goalMessage = '⚽ ¡GOL de los humanos!';
+        this.puck.vx = 0; this.puck.vy = 0;
+        return;
+      } else {
+        this.puck.y = FH_PUCK_R;
+        this.puck.vy = Math.abs(this.puck.vy) * 0.8;
+      }
+    }
+
+    // Bottom goal (Humans' goal — AI scores here)
+    if (this.puck.y + FH_PUCK_R > h) {
+      if (this.puck.x > goalLeft && this.puck.x < goalRight) {
+        this.scoreAI++;
+        this.goalFlashTimer = 60;
+        this.goalMessage = '🤖 ¡GOL de la IA!';
+        this.puck.vx = 0; this.puck.vy = 0;
+        return;
+      } else {
+        this.puck.y = h - FH_PUCK_R;
+        this.puck.vy = -Math.abs(this.puck.vy) * 0.8;
+      }
+    }
+
+    // Mallet collisions
+    this.resolveMalletCollision(this.p1Mallet, this.p1Prev);
+    this.resolveMalletCollision(this.p2Mallet, this.p2Prev);
+    this.resolveAICollision(this.ai1);
+    this.resolveAICollision(this.ai2);
+
+    this.p1Prev = { ...this.p1Mallet };
+    this.p2Prev = { ...this.p2Mallet };
+  }
+
+  // ── Sync ──
+  private broadcastState() {
+    this.ctx.sync.setState({
+      fhState: {
+        puck: this.puck,
+        ai1: this.ai1,
+        ai2: this.ai2,
+        p1: this.p1Mallet,
+        p2: this.p2Mallet,
+        sH: this.scoreHumans,
+        sA: this.scoreAI,
+        gf: this.goalFlashTimer,
+        gm: this.goalMessage,
+        ts: Date.now()
+      }
+    });
+  }
+
+  private onStateChange = (state: any) => {
+    // Host receives guest mallet position
+    if (this.ctx.isHost && state.fhMallet && state.fhMallet.ts !== this.lastMalletTs) {
+      this.lastMalletTs = state.fhMallet.ts;
+      if (state.fhMallet.by !== this.ctx.me.id) {
+        this.p2Prev = { ...this.p2Mallet };
+        this.p2Mallet = { x: state.fhMallet.x, y: state.fhMallet.y };
+      }
+    }
+
+    // Guest receives authoritative state
+    if (!this.ctx.isHost && state.fhState) {
+      const s = state.fhState;
+      this.puck = { ...s.puck };
+      this.ai1 = { ...s.ai1 };
+      this.ai2 = { ...s.ai2 };
+      this.p1Mallet = { ...s.p1 };
+      // Don't overwrite p2 if we're the guest (local prediction)
+      this.scoreHumans = s.sH;
+      this.scoreAI = s.sA;
+      this.goalFlashTimer = s.gf;
+      this.goalMessage = s.gm;
+    }
+  };
+
+  // ── Render ──
+  private loop = () => {
+    this.update();
+    this.draw();
+    this.animId = requestAnimationFrame(this.loop);
+  };
+
+  private draw() {
+    const c = this.canvasCtx;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+
+    c.clearRect(0, 0, w, h);
+
+    // ── Rink background ──
+    // Center line
+    c.setLineDash([8, 8]);
+    c.strokeStyle = 'rgba(0,0,0,0.12)';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(0, h / 2);
+    c.lineTo(w, h / 2);
+    c.stroke();
+    c.setLineDash([]);
+
+    // Center circle
+    c.strokeStyle = 'rgba(0,0,0,0.08)';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.arc(w / 2, h / 2, Math.min(w, h) * 0.15, 0, Math.PI * 2);
+    c.stroke();
+
+    // Goals
+    const goalW = w * FH_GOAL_W_RATIO;
+    const goalLeft = (w - goalW) / 2;
+
+    // Top goal (AI's — humans try to score here)
+    c.fillStyle = 'rgba(85, 239, 196, 0.2)';
+    c.strokeStyle = '#55efc4';
+    c.lineWidth = 4;
+    c.fillRect(goalLeft, 0, goalW, 10);
+    c.beginPath();
+    c.moveTo(goalLeft, 10);
+    c.lineTo(goalLeft, 0);
+    c.lineTo(goalLeft + goalW, 0);
+    c.lineTo(goalLeft + goalW, 10);
+    c.stroke();
+
+    // Bottom goal (Humans' — AI tries to score here)
+    c.fillStyle = 'rgba(255, 118, 117, 0.2)';
+    c.strokeStyle = '#ff7675';
+    c.lineWidth = 4;
+    c.fillRect(goalLeft, h - 10, goalW, 10);
+    c.beginPath();
+    c.moveTo(goalLeft, h - 10);
+    c.lineTo(goalLeft, h);
+    c.lineTo(goalLeft + goalW, h);
+    c.lineTo(goalLeft + goalW, h - 10);
+    c.stroke();
+
+    // Rink border
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 4;
+    c.strokeRect(2, 2, w - 4, h - 4);
+
+    // ── AI Mallets (top) ──
+    this.drawMallet(c, this.ai1.x, this.ai1.y, '#ff7675', '🤖');
+    this.drawMallet(c, this.ai2.x, this.ai2.y, '#ff7675', '🤖');
+
+    // ── Human Mallets (bottom) ──
+    this.drawMallet(c, this.p1Mallet.x, this.p1Mallet.y, '#74b9ff', 'P1');
+    this.drawMallet(c, this.p2Mallet.x, this.p2Mallet.y, '#a29bfe', 'P2');
+
+    // ── Puck ──
+    c.beginPath();
+    c.arc(this.puck.x, this.puck.y, FH_PUCK_R, 0, Math.PI * 2);
+    c.fillStyle = '#2d3436';
+    c.fill();
+    c.strokeStyle = '#636e72';
+    c.lineWidth = 2;
+    c.stroke();
+    // Puck highlight
+    c.beginPath();
+    c.arc(this.puck.x - 4, this.puck.y - 4, 4, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,255,255,0.5)';
+    c.fill();
+
+    // ── Scoreboard ──
+    c.font = `bold 22px 'Patrick Hand', cursive`;
+    c.textAlign = 'left';
+    c.fillStyle = '#2d3436';
+    c.fillText(`👫 ${this.scoreHumans}`, 14, h / 2 - 8);
+    c.textAlign = 'right';
+    c.fillText(`🤖 ${this.scoreAI}`, w - 14, h / 2 + 22);
+
+    // ── Goal flash ──
+    if (this.goalFlashTimer > 0) {
+      const alpha = Math.min(1, this.goalFlashTimer / 30);
+      c.fillStyle = `rgba(253,251,247,${alpha * 0.7})`;
+      c.fillRect(0, 0, w, h);
+
+      c.font = `bold ${w * 0.07}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillStyle = '#2d3436';
+      c.fillText(this.goalMessage, w / 2, h / 2);
+    }
+
+    // ── Game Over ──
+    if (this.scoreHumans >= this.maxScore || this.scoreAI >= this.maxScore) {
+      c.fillStyle = 'rgba(253,251,247,0.85)';
+      c.fillRect(0, 0, w, h);
+
+      const humansWon = this.scoreHumans >= this.maxScore;
+      c.fillStyle = '#2d3436';
+      c.font = `bold ${w * 0.12}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(humansWon ? '🎉' : '🤖', w / 2, h * 0.35);
+
+      c.font = `bold ${w * 0.06}px 'Patrick Hand', cursive`;
+      c.fillText(
+        humansWon ? '¡Los humanos ganan!' : '¡La IA gana!',
+        w / 2, h * 0.48
+      );
+
+      c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
+      c.fillStyle = '#636e72';
+      c.fillText(`${this.scoreHumans} - ${this.scoreAI}`, w / 2, h * 0.56);
+    }
+  }
+
+  private drawMallet(c: CanvasRenderingContext2D, x: number, y: number, color: string, label: string) {
+    // Outer ring
+    c.beginPath();
+    c.arc(x, y, FH_MALLET_R, 0, Math.PI * 2);
+    c.fillStyle = color;
+    c.fill();
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 3;
+    c.stroke();
+
+    // Inner ring
+    c.beginPath();
+    c.arc(x, y, FH_MALLET_R * 0.55, 0, Math.PI * 2);
+    c.fillStyle = 'white';
+    c.fill();
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 2;
+    c.stroke();
+
+    // Label
+    c.font = `bold 13px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillStyle = '#2d3436';
+    c.fillText(label, x, y + 1);
+  }
+
+  destroy(): void {
+    cancelAnimationFrame(this.animId);
+    if (this.syncInterval) clearInterval(this.syncInterval);
+    this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.ctx.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.ctx.canvas.removeEventListener('pointerup', this.onPointerUp);
+    this.ctx.canvas.removeEventListener('pointercancel', this.onPointerUp);
+    this.ctx.sync.off('stateChange', this.onStateChange);
+  }
 }
 
 // ── Factory ────────────────────────────────────────────
