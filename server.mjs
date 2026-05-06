@@ -34,13 +34,31 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({ status: 'ok', service: 'DuoPlay', ts: new Date().toISOString() }));
   }
 
-  // Mock token endpoint (Discord Activity auth flow)
+  // Real token endpoint (Discord Activity OAuth2 exchange)
   if (url.pathname === '/api/token' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ access_token: 'mock_token' }));
+    req.on('end', async () => {
+      try {
+        const { code } = JSON.parse(body);
+        const response = await fetch('https://discord.com/api/oauth2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: process.env.DISCORD_CLIENT_ID || '',
+            client_secret: process.env.DISCORD_CLIENT_SECRET || '',
+            grant_type: 'authorization_code',
+            code: code,
+          }),
+        });
+        const data = await response.json();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data));
+      } catch (err) {
+        console.error('[DuoPlay] Token exchange failed:', err);
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: 'Token exchange failed' }));
+      }
     });
     return;
   }
