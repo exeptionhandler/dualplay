@@ -14,6 +14,19 @@ const sync = new Sync();
 let currentGame: GameModule | null = null;
 let me: any = null;
 let participants: any[] = [];
+let currentScreen: string = ''; // Track which screen we're on to prevent re-entry
+
+// ── Navigation state change handler (defined once) ──
+function handleNavigationChange(state: any) {
+  const target = state.navigate;
+  if (!target || target === currentScreen) return; // ← KEY FIX: skip if already on this screen
+
+  if (target === 'lobby') {
+    goLobby();
+  } else {
+    goGame(target);
+  }
+}
 
 // ── Boot ───────────────────────────────────────────────
 async function init() {
@@ -60,14 +73,7 @@ async function init() {
       userId: me.id,
     });
 
-    sync.on('stateChange', (state: any) => {
-      if (state.navigate && state.navigate !== 'lobby') {
-        goGame(state.navigate);
-      } else if (state.navigate === 'lobby') {
-        goLobby();
-      }
-    });
-
+    sync.on('stateChange', handleNavigationChange);
     goLobby();
   } catch (e: any) {
     console.error('Init Error:', e);
@@ -75,17 +81,8 @@ async function init() {
     me = { id: 'local_user', username: 'DevUser', avatar: null };
     participants = [me];
     
-    // Fallback sync init for local dev
     await sync.init({ channelId: 'local', userId: me.id });
-    
-    sync.on('stateChange', (state: any) => {
-      if (state.navigate && state.navigate !== 'lobby') {
-        goGame(state.navigate);
-      } else if (state.navigate === 'lobby') {
-        goLobby();
-      }
-    });
-
+    sync.on('stateChange', handleNavigationChange);
     goLobby();
   }
 }
@@ -95,6 +92,7 @@ async function init() {
 // ═══════════════════════════════════════════════════════
 
 function goLobby(): void {
+  currentScreen = 'lobby';
   currentGame?.destroy();
   currentGame = null;
 
@@ -107,6 +105,7 @@ function goGame(gameId: GameId): void {
   const entry = GAMES.find(g => g.id === gameId);
   if (!entry) return;
 
+  currentScreen = gameId; // ← Set BEFORE init to prevent re-entry
   currentGame?.destroy();
 
   const canvas = renderGameView(entry, {
@@ -119,7 +118,6 @@ function goGame(gameId: GameId): void {
   const mod = GAME_MODULES[gameId]?.();
   if (mod) {
     currentGame = mod;
-    // First user to join the lobby becomes host, or just whoever has the smallest ID
     const isHost = participants.length > 0 && participants[0].id === me.id;
 
     mod.init({
@@ -143,3 +141,4 @@ function handleGameSelect(gameId: GameId): void {
 
 // Boot app
 init();
+
