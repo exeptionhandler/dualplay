@@ -72,19 +72,15 @@ async function init() {
       channelId: discordSdk.channelId,
       userId: me.id,
     });
-
-    sync.on('stateChange', handleNavigationChange);
-    goLobby();
   } catch (e: any) {
     console.error('Init Error:', e);
-    // Fallback to local dev lobby if not in Discord or if error occurs
     me = { id: 'local_user', username: 'DevUser', avatar: null };
     participants = [me];
-    
     await sync.init({ channelId: 'local', userId: me.id });
-    sync.on('stateChange', handleNavigationChange);
-    goLobby();
   }
+
+  sync.on('stateChange', handleNavigationChange);
+  goLobby();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -111,7 +107,6 @@ function goGame(gameId: GameId): void {
   const canvas = renderGameView(entry, {
     onBack: () => {
       sync.setState({ navigate: 'lobby' });
-      goLobby();
     },
   });
 
@@ -136,7 +131,6 @@ function goGame(gameId: GameId): void {
 
 function handleGameSelect(gameId: GameId): void {
   sync.setState({ navigate: gameId });
-  goGame(gameId);
 }
 
 // Boot app
