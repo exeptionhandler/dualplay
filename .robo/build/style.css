@@ -325,6 +325,26 @@ body {
   touch-action: none;
 }
 
+/* ── Waiting Overlay ────────────────────────────── */
+.waiting-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(253, 251, 247, 0.85); /* Semi-transparent cream */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 2rem;
+  font-weight: bold;
+  color: var(--ink-secondary);
+  z-index: 10;
+  backdrop-filter: blur(4px);
+}
+.waiting-overlay.hidden {
+  display: none;
+}
+
 /* ── Toast Notification ─────────────────────────── */
 .toast-container {
   position: fixed;

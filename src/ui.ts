@@ -149,6 +149,10 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCan
       </div>
       <div class="game-canvas-area" id="canvas-area">
         <canvas id="game-canvas"></canvas>
+        <div id="game-waiting-overlay" class="waiting-overlay hidden">
+          <div class="spinner"></div>
+          <div>Esperando al Jugador 2...</div>
+        </div>
       </div>
     </div>
   `);
@@ -186,4 +190,12 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCan
   document.getElementById('btn-back-lobby')!.addEventListener('click', cbs.onBack);
 
   return canvas;
+}
+
+export function setWaitingOverlay(show: boolean): void {
+  const overlay = document.getElementById('game-waiting-overlay');
+  if (overlay) {
+    if (show) overlay.classList.remove('hidden');
+    else overlay.classList.add('hidden');
+  }
 }

@@ -1,6 +1,6 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { Sync } from './sync';
-import { renderLobby, renderGameView, showToast } from './ui';
+import { renderLobby, renderGameView, showToast, setWaitingOverlay } from './ui';
 import type { GameId } from './types';
 import { GAME_MODULES } from './games';
 import type { GameModule } from './games';
@@ -86,7 +86,12 @@ async function init() {
     if (!participants.find(p => p.id === user.id)) {
       participants.push(user);
       // If we are in lobby, re-render to show new player
-      if (currentScreen === 'lobby') goLobby();
+      if (currentScreen === 'lobby') {
+        goLobby();
+      } else if (participants.length >= 2) {
+        // If we are in game and someone joins, hide waiting overlay
+        setWaitingOverlay(false);
+      }
       // Send our presence back so they see us too
       sync.sendPresence(me);
     }
@@ -122,6 +127,10 @@ function goGame(gameId: GameId): void {
       sync.setState({ navigate: 'lobby' });
     },
   });
+
+  if (participants.length < 2) {
+    setWaitingOverlay(true);
+  }
 
   const mod = GAME_MODULES[gameId]?.();
   if (mod) {
