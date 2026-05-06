@@ -80,6 +80,19 @@ async function init() {
   }
 
   sync.on('stateChange', handleNavigationChange);
+  
+  // Presence tracking: see other players
+  sync.on('presence', (user: any) => {
+    if (!participants.find(p => p.id === user.id)) {
+      participants.push(user);
+      // If we are in lobby, re-render to show new player
+      if (currentScreen === 'lobby') goLobby();
+      // Send our presence back so they see us too
+      sync.sendPresence(me);
+    }
+  });
+  sync.sendPresence(me);
+
   goLobby();
 }
 

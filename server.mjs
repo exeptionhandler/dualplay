@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { WebSocketServer, WebSocket } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || '10000');
@@ -88,6 +89,40 @@ const server = http.createServer((req, res) => {
     res.writeHead(404);
     res.end('Not Found');
   }
+});
+
+// ── WebSocket Relay Server ──
+const wss = new WebSocketServer({ server });
+const channels = new Map(); // channelId -> Set of WebSockets
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const channelId = url.searchParams.get('channelId') || 'global';
+
+  if (!channels.has(channelId)) {
+    channels.set(channelId, new Set());
+  }
+  channels.get(channelId).add(ws);
+
+  ws.on('message', (data) => {
+    // Relay to all OTHER clients in the same channel
+    const clients = channels.get(channelId);
+    if (clients) {
+      clients.forEach(client => {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(data);
+        }
+      });
+    }
+  });
+
+  ws.on('close', () => {
+    const clients = channels.get(channelId);
+    if (clients) {
+      clients.delete(ws);
+      if (clients.size === 0) channels.delete(channelId);
+    }
+  });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
