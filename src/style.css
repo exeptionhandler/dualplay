@@ -250,6 +250,17 @@ body {
   font-weight: bold;
   color: var(--ink-primary);
   margin-bottom: -4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.host-star {
+  font-size: 1.2rem;
+  animation: pulse-star 1s infinite alternate var(--ease-bounce);
+}
+@keyframes pulse-star {
+  from { transform: scale(0.9) rotate(-10deg); opacity: 0.8; }
+  to   { transform: scale(1.3) rotate(15deg); opacity: 1; }
 }
 .game-desc {
   font-size: 1.1rem;

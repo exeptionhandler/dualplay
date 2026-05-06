@@ -15,16 +15,16 @@ let currentGame: GameModule | null = null;
 let me: any = null;
 let participants: any[] = [];
 let currentScreen: string = ''; // Track which screen we're on to prevent re-entry
+let gamePendingInit: { mod: GameModule, canvas: HTMLCanvasElement, isHost: boolean } | null = null;
 
 // ── Navigation state change handler (defined once) ──
 function handleNavigationChange(state: any) {
-  const target = state.navigate;
-  if (!target || target === currentScreen) return; // ← KEY FIX: skip if already on this screen
-
-  if (target === 'lobby') {
-    goLobby();
-  } else {
-    goGame(target);
+  // Instead of forcing navigation, we just update the lobby if we are in it
+  if (currentScreen === 'lobby') {
+    renderLobby(participants, {
+      onGameSelect: handleGameSelect,
+      hostLocation: state.host_location
+    });
   }
 }
 
@@ -85,15 +85,28 @@ async function init() {
   sync.on('presence', (user: any) => {
     if (!participants.find(p => p.id === user.id)) {
       participants.push(user);
-      // If we are in lobby, re-render to show new player
+      
       if (currentScreen === 'lobby') {
         goLobby();
       } else if (participants.length >= 2) {
-        // If we are in game and someone joins, hide waiting overlay
         setWaitingOverlay(false);
+        // Start the game logic now that player 2 is here
+        if (gamePendingInit) {
+          gamePendingInit.mod.init({
+            canvas: gamePendingInit.canvas,
+            sync,
+            me,
+            isHost: gamePendingInit.isHost
+          });
+          gamePendingInit = null;
+        }
       }
       // Send our presence back so they see us too
       sync.sendPresence(me);
+      // Let them know where we are
+      if (currentScreen !== 'lobby') {
+        sync.setState({ host_location: currentScreen });
+      }
     }
   });
   sync.sendPresence(me);
@@ -109,9 +122,12 @@ function goLobby(): void {
   currentScreen = 'lobby';
   currentGame?.destroy();
   currentGame = null;
+  gamePendingInit = null;
+  sync.setState({ host_location: null });
 
   renderLobby(participants, {
     onGameSelect: handleGameSelect,
+    hostLocation: sync.getState().host_location
   });
 }
 
@@ -119,30 +135,27 @@ function goGame(gameId: GameId): void {
   const entry = GAMES.find(g => g.id === gameId);
   if (!entry) return;
 
-  currentScreen = gameId; // ← Set BEFORE init to prevent re-entry
+  currentScreen = gameId;
   currentGame?.destroy();
 
   const canvas = renderGameView(entry, {
     onBack: () => {
-      sync.setState({ navigate: 'lobby' });
+      goLobby();
     },
   });
-
-  if (participants.length < 2) {
-    setWaitingOverlay(true);
-  }
 
   const mod = GAME_MODULES[gameId]?.();
   if (mod) {
     currentGame = mod;
     const isHost = participants.length > 0 && participants[0].id === me.id;
 
-    mod.init({
-      canvas,
-      sync,
-      me,
-      isHost
-    });
+    if (participants.length < 2) {
+      setWaitingOverlay(true);
+      gamePendingInit = { mod, canvas, isHost };
+    } else {
+      setWaitingOverlay(false);
+      mod.init({ canvas, sync, me, isHost });
+    }
     showToast(`${entry.emoji} ${entry.name} cargado`);
   }
 }
@@ -152,7 +165,8 @@ function goGame(gameId: GameId): void {
 // ═══════════════════════════════════════════════════════
 
 function handleGameSelect(gameId: GameId): void {
-  sync.setState({ navigate: gameId });
+  sync.setState({ host_location: gameId });
+  goGame(gameId);
 }
 
 // Boot app

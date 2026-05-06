@@ -77,6 +77,7 @@ export const GAMES: GameEntry[] = [
 
 export interface LobbyCallbacks {
   onGameSelect: (gameId: GameId) => void;
+  hostLocation?: GameId | null;
 }
 
 export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
@@ -109,7 +110,10 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
             <div class="game-card" data-game="${g.id}" tabindex="0" role="button">
               <div class="game-emoji">${g.emoji}</div>
               <div class="game-info">
-                <div class="game-name">${g.name}</div>
+                <div class="game-name">
+                  ${g.name}
+                  ${cbs.hostLocation === g.id ? '<span class="host-star" title="Jugador 1 está aquí">⭐</span>' : ''}
+                </div>
                 <div class="game-desc">${g.desc}</div>
               </div>
               <div class="${tagClass(g.tag)}">${g.tagLabel}</div>
