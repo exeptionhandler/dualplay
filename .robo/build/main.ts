@@ -120,7 +120,9 @@ async function init() {
 
 function goLobby(): void {
   currentScreen = 'lobby';
-  currentGame?.destroy();
+  if (!gamePendingInit) {
+    currentGame?.destroy();
+  }
   currentGame = null;
   gamePendingInit = null;
   sync.setState({ host_location: null });
@@ -136,7 +138,10 @@ function goGame(gameId: GameId): void {
   if (!entry) return;
 
   currentScreen = gameId;
-  currentGame?.destroy();
+  if (!gamePendingInit) {
+    currentGame?.destroy();
+  }
+  currentGame = null;
 
   const canvas = renderGameView(entry, {
     onBack: () => {
