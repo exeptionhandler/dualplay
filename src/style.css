@@ -301,6 +301,14 @@ body {
   background: var(--accent-green);
 }
 
+.btn-discord-invite {
+  background: #eef2ff;
+}
+
+.btn-discord-invite:hover {
+  background: #e0e7ff;
+}
+
 /* Header Roster / Player Desk */
 .header-roster-group {
   display: flex;

@@ -21,6 +21,8 @@ let currentScreen: string = 'lobby';
 let gamePendingInit: { mod: GameModule, canvas: HTMLCanvasElement, isHost: boolean } | null = null;
 let currentRoomId = 'global';
 let reactionCounter = 0;
+let discordSdkInstance: DiscordSDK | null = null;
+let isDiscordMode = false;
 
 // Deterministic Host Arbitrage (Prevents Split-Brain)
 function getIsHost(): boolean {
@@ -37,6 +39,7 @@ function handleNavigationChange(state: any) {
       onGameSelect: handleGameSelect,
       hostLocation: state.host_location,
       onInvite: handleInvite,
+      inviteType: getInviteType(),
       onPlayBot: handlePlayWithBot,
       onProfileUpdate: handleProfileUpdate,
     });
@@ -89,6 +92,9 @@ async function init() {
         headers: { Authorization: `Bearer ${authResult.access_token}` }
       }).then(res => res.json()).catch(() => null);
 
+      discordSdkInstance = discordSdk;
+      isDiscordMode = true;
+
       me = {
         id: discordUser?.id || `u_${Math.random().toString(36).slice(2, 7)}`,
         username: profile.customName || discordUser?.username || 'Gamer Discord',
@@ -101,9 +107,13 @@ async function init() {
       currentRoomId = discordSdk.channelId || currentRoomId;
     } catch (e) {
       console.warn('Fallback a modo Web Standalone desde Discord:', e);
+      discordSdkInstance = null;
+      isDiscordMode = false;
       setupStandaloneUser(profile);
     }
   } else {
+    discordSdkInstance = null;
+    isDiscordMode = false;
     setupStandaloneUser(profile);
   }
 
@@ -219,6 +229,7 @@ function goLobby(): void {
     onGameSelect: handleGameSelect,
     hostLocation: sync.getState().host_location,
     onInvite: handleInvite,
+    inviteType: getInviteType(),
     onPlayBot: handlePlayWithBot,
     onProfileUpdate: handleProfileUpdate,
   });
@@ -265,7 +276,31 @@ function handleGameSelect(gameId: GameId): void {
   goGame(gameId);
 }
 
-function handleInvite(): void {
+function getInviteType(): 'discord' | 'link' | 'none' {
+  if (isDiscordMode) {
+    // Discord openInviteDialog requires a guild context (throws RPCError.INVALID_CHANNEL in DMs/GDMs)
+    if (discordSdkInstance && discordSdkInstance.guildId != null && typeof discordSdkInstance.commands?.openInviteDialog === 'function') {
+      return 'discord';
+    }
+    return 'none';
+  }
+  return 'link';
+}
+
+async function handleInvite(): Promise<void> {
+  if (isDiscordMode) {
+    if (discordSdkInstance && typeof discordSdkInstance.commands?.openInviteDialog === 'function') {
+      try {
+        await discordSdkInstance.commands.openInviteDialog();
+      } catch (err) {
+        console.warn('Error abriendo diálogo de invitación de Discord:', err);
+        showToast('⚠️ No se puede invitar en este canal de Discord.');
+      }
+    }
+    return;
+  }
+
+  // Standalone Web mode
   const shareUrl = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(currentRoomId)}`;
   if (navigator.clipboard) {
     navigator.clipboard.writeText(shareUrl).then(() => {

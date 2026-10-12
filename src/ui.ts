@@ -89,6 +89,7 @@ export interface LobbyCallbacks {
   onGameSelect: (gameId: GameId) => void;
   hostLocation?: GameId | null;
   onInvite?: () => void;
+  inviteType?: 'discord' | 'link' | 'none';
   onPlayBot?: () => void;
   onProfileUpdate?: () => void;
   onReaction?: (emoji: string) => void;
@@ -97,6 +98,25 @@ export interface LobbyCallbacks {
 export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
   const tagClass = (t: GameEntry['tag']) => 'game-tag tag-' + t;
   const profile = profileManager.getProfile();
+  const inviteType = cbs.inviteType ?? 'link';
+
+  const getInviteButtonHtml = () => {
+    if (inviteType === 'none') return '';
+    if (inviteType === 'discord') {
+      return `
+        <button class="btn-icon-doodle btn-discord-invite" id="btn-invite" title="Invitar amigos de Discord">
+          <span class="btn-icon">👥</span>
+          <span class="btn-label">Invitar</span>
+        </button>
+      `;
+    }
+    return `
+      <button class="btn-icon-doodle" id="btn-invite" title="Invitar a un amigo con link">
+        <span class="btn-icon">🔗</span>
+        <span class="btn-label">Invitar</span>
+      </button>
+    `;
+  };
 
   const getAvatarDisplay = (p: any) => {
     if (p.avatar) {
@@ -144,10 +164,7 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
             <span class="btn-label">Perfil</span>
             <span class="badge-count-bubble">${profile.equippedBadgeIds.length}/3</span>
           </button>
-          <button class="btn-icon-doodle" id="btn-invite" title="Invitar a un amigo con link">
-            <span class="btn-icon">🔗</span>
-            <span class="btn-label">Invitar</span>
-          </button>
+          ${getInviteButtonHtml()}
           ${participants.length < 2 ? `
             <button class="btn-icon-doodle btn-bot-action" id="btn-add-bot" title="Invocar a DuoBot para jugar juntos">
               <span class="btn-icon">🤖</span>
