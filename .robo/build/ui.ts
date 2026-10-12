@@ -7,13 +7,13 @@ import { ALL_BADGES, profileManager } from './badges';
 import { sound, haptic } from './audio';
 
 let toastContainer: HTMLElement | null = null;
-let activeResizeObserver: ResizeObserver | null = null;
 let activeResizeListener: (() => void) | null = null;
+let activeResizeRaf: number | null = null;
 
 export function cleanupGameView(): void {
-  if (activeResizeObserver) {
-    activeResizeObserver.disconnect();
-    activeResizeObserver = null;
+  if (activeResizeRaf !== null) {
+    cancelAnimationFrame(activeResizeRaf);
+    activeResizeRaf = null;
   }
   if (activeResizeListener) {
     window.removeEventListener('resize', activeResizeListener);
@@ -546,20 +546,38 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks, partner?
 
   const resize = () => {
     if (!area || !canvas) return;
-    canvas.width  = area.clientWidth - 24;
-    canvas.height = area.clientHeight - 24;
+    const rect = area.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    // Leave a 32px safe margin so the canvas never overflows the doodle border
+    const targetW = Math.max(280, Math.floor(rect.width - 32));
+    const targetH = Math.max(280, Math.floor(rect.height - 32));
+
+    // Threshold guard: only update dimensions if they changed by 4px or more (prevents subpixel oscillation)
+    if (Math.abs(canvas.width - targetW) >= 4 || Math.abs(canvas.height - targetH) >= 4) {
+      canvas.width  = targetW;
+      canvas.height = targetH;
+    }
   };
+
+  // Immediate sizing
   resize();
 
-  if (typeof ResizeObserver !== 'undefined') {
-    activeResizeObserver = new ResizeObserver(() => {
+  // Schedule one post-layout check to ensure accurate size after DOM paint
+  activeResizeRaf = requestAnimationFrame(() => {
+    resize();
+    activeResizeRaf = null;
+  });
+
+  // Listen to window resize events only (debounced)
+  activeResizeListener = () => {
+    if (activeResizeRaf !== null) cancelAnimationFrame(activeResizeRaf);
+    activeResizeRaf = requestAnimationFrame(() => {
       resize();
+      activeResizeRaf = null;
     });
-    activeResizeObserver.observe(area);
-  } else {
-    activeResizeListener = resize;
-    window.addEventListener('resize', activeResizeListener, { passive: true });
-  }
+  };
+  window.addEventListener('resize', activeResizeListener, { passive: true });
 
   document.getElementById('btn-back-lobby')!.addEventListener('click', () => {
     sound.click();
