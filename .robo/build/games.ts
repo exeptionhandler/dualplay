@@ -95,10 +95,11 @@ export class TetrisDual implements GameModule {
   
   // UI Buttons
   private buttons = [
-    { id: 'left',  x: 0.1, y: 0.85, w: 0.18, h: 0.1, text: '◀' },
-    { id: 'right', x: 0.3, y: 0.85, w: 0.18, h: 0.1, text: '▶' },
-    { id: 'drop',  x: 0.5, y: 0.85, w: 0.18, h: 0.1, text: '▼' },
-    { id: 'rot',   x: 0.72, y: 0.85, w: 0.18, h: 0.1, text: '↻' }
+    { id: 'left',  x: 0.05, y: 0.85, w: 0.16, h: 0.1, text: '◀' },
+    { id: 'right', x: 0.23, y: 0.85, w: 0.16, h: 0.1, text: '▶' },
+    { id: 'drop',  x: 0.41, y: 0.85, w: 0.16, h: 0.1, text: '▼' },
+    { id: 'rot',   x: 0.59, y: 0.85, w: 0.16, h: 0.1, text: '↻' },
+    { id: 'hard_drop', x: 0.77, y: 0.85, w: 0.18, h: 0.1, text: '⚡' }
   ];
   
   private lastInputTs = 0;
@@ -269,27 +270,46 @@ export class TetrisDual implements GameModule {
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'ArrowLeft') this.sendInput('left');
-    if (e.key === 'ArrowRight') this.sendInput('right');
-    if (e.key === 'ArrowUp') this.sendInput('rot');
-    if (e.key === 'ArrowDown') this.sendInput('drop');
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') this.sendInput('left');
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') this.sendInput('right');
+    if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') this.sendInput('rot');
+    if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') this.sendInput('drop');
+    if (e.key === ' ' || e.key === 'Spacebar') this.sendInput('hard_drop');
   };
 
+  private getGhostY(p: PieceState, otherP: PieceState): number {
+    if (!p.active) return p.y;
+    let gy = p.y;
+    while (!this.collides(p, 0, gy - p.y + 1, 0) && !this.collidesWithOther(p, otherP, 0, gy - p.y + 1, 0)) {
+      gy++;
+    }
+    return gy;
+  }
+
   private sendInput(action: string) {
-    // Predict locally for instant feedback if we know which piece is ours
+    // Predict locally for instant feedback
     const myPiece = this.ctx.isHost ? this.p1 : this.p2;
     const otherPiece = this.ctx.isHost ? this.p2 : this.p1;
     
-    let dx = 0, dy = 0, dr = 0;
-    if (action === 'left') dx = -1;
-    if (action === 'right') dx = 1;
-    if (action === 'rot') dr = 1;
-    if (action === 'drop') dy = 1;
+    if (action === 'hard_drop') {
+      const dropY = this.getGhostY(myPiece, otherPiece);
+      myPiece.y = dropY;
+      sound.thud(120);
+      haptic(30);
+    } else {
+      let dx = 0, dy = 0, dr = 0;
+      if (action === 'left') dx = -1;
+      if (action === 'right') dx = 1;
+      if (action === 'rot') dr = 1;
+      if (action === 'drop') dy = 1;
 
-    if (!this.collides(myPiece, dx, dy, dr) && !this.collidesWithOther(myPiece, otherPiece, dx, dy, dr)) {
-      myPiece.x += dx;
-      myPiece.y += dy;
-      myPiece.rot += dr;
+      if (!this.collides(myPiece, dx, dy, dr) && !this.collidesWithOther(myPiece, otherPiece, dx, dy, dr)) {
+        myPiece.x += dx;
+        myPiece.y += dy;
+        myPiece.rot += dr;
+        sound.click();
+        haptic(10);
+      }
     }
 
     // Send to host
@@ -411,9 +431,19 @@ export class TetrisDual implements GameModule {
       }
     }
 
+    // Draw Ghost Pieces
+    if (this.p1.active) {
+      const gy1 = this.getGhostY(this.p1, this.p2);
+      this.drawPiece(c, { ...this.p1, y: gy1 }, cellSize, true, '#0984e3');
+    }
+    if (this.p2.active) {
+      const gy2 = this.getGhostY(this.p2, this.p1);
+      this.drawPiece(c, { ...this.p2, y: gy2 }, cellSize, true, '#ff7675');
+    }
+
     // Draw Active Pieces
-    if (this.p1.active) this.drawPiece(c, this.p1, cellSize);
-    if (this.p2.active) this.drawPiece(c, this.p2, cellSize);
+    if (this.p1.active) this.drawPiece(c, this.p1, cellSize, false, '#0984e3', 'P1 🔵');
+    if (this.p2.active) this.drawPiece(c, this.p2, cellSize, false, '#ff7675', 'P2 🔴');
 
     // Border
     c.strokeStyle = 'var(--ink-primary)';
@@ -422,7 +452,7 @@ export class TetrisDual implements GameModule {
     c.restore();
 
     // Draw Buttons (Bottom 20%)
-    c.font = '30px "Patrick Hand", cursive';
+    c.font = '26px "Patrick Hand", cursive';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
     
@@ -432,7 +462,7 @@ export class TetrisDual implements GameModule {
       const bw = b.w * w;
       const bh = b.h * h;
 
-      c.fillStyle = 'white';
+      c.fillStyle = b.id === 'hard_drop' ? '#ffeaa7' : 'white';
       c.strokeStyle = 'var(--ink-primary)';
       c.lineWidth = 3;
       c.beginPath();
@@ -445,14 +475,40 @@ export class TetrisDual implements GameModule {
     }
   }
 
-  private drawPiece(c: CanvasRenderingContext2D, p: PieceState, size: number) {
+  private drawPiece(c: CanvasRenderingContext2D, p: PieceState, size: number, isGhost = false, glowColor = '', label = '') {
     const shape = this.getShape(p.id, p.rot);
+    if (isGhost) {
+      c.save();
+      c.globalAlpha = 0.25;
+      for (let r = 0; r < shape.length; r++) {
+        for (let col = 0; col < shape[r].length; col++) {
+          if (shape[r][col] !== 0) {
+            this.drawBlock(c, p.x + col, p.y + r, size, p.id);
+          }
+        }
+      }
+      c.restore();
+      return;
+    }
+
     for (let r = 0; r < shape.length; r++) {
       for (let col = 0; col < shape[r].length; col++) {
         if (shape[r][col] !== 0) {
           this.drawBlock(c, p.x + col, p.y + r, size, p.id);
         }
       }
+    }
+
+    // Label tag above piece
+    if (label) {
+      c.save();
+      c.fillStyle = glowColor;
+      c.font = 'bold 13px "Patrick Hand", cursive';
+      c.textAlign = 'center';
+      const centerX = (p.x + shape[0].length / 2) * size;
+      const topY = p.y * size - 6;
+      c.fillText(label, centerX, topY);
+      c.restore();
     }
   }
 
@@ -534,6 +590,11 @@ export class BalloonGame implements GameModule {
     this.loop();
   }
 
+  private lastTapBy: string | null = null;
+  private comboMultiplier = 1;
+  private wind = 0;
+  private powerup: { x: number, y: number, type: 'star' | 'feather', radius: number, active: boolean } | null = null;
+
   private restart() {
     this.balloon.x = this.ctx.canvas.width / 2;
     this.balloon.y = this.ctx.canvas.height * 0.4;
@@ -543,17 +604,44 @@ export class BalloonGame implements GameModule {
     this.squash = 1;
     this.gameOver = false;
     this.startTime = Date.now();
+    this.lastTapBy = null;
+    this.comboMultiplier = 1;
+    this.spawnPowerup();
+  }
+
+  private spawnPowerup() {
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+    this.powerup = {
+      x: 60 + Math.random() * (w - 120),
+      y: h * 0.2 + Math.random() * (h * 0.4),
+      type: Math.random() < 0.5 ? 'star' : 'feather',
+      radius: 22,
+      active: true,
+    };
+  }
+
+  private handleTapLogic(userId: string) {
+    this.balloon.vy = this.jumpForce;
+    this.balloon.vx += (Math.random() - 0.5) * 3;
+    this.squash = 0.68;
+
+    if (this.lastTapBy && this.lastTapBy !== userId) {
+      this.comboMultiplier = Math.min(8, this.comboMultiplier + 1);
+      this.particles.spawnConfetti(this.balloon.x, this.balloon.y, 10);
+      sound.star();
+    } else {
+      this.comboMultiplier = 1;
+      sound.boing(340);
+    }
+    this.lastTapBy = userId;
+    this.score += this.comboMultiplier;
+    haptic(20);
   }
 
   private onTap = () => {
     if (this.gameOver) return;
-
-    this.balloon.vy = this.jumpForce;
-    this.balloon.vx += (Math.random() - 0.5) * 2;
-    this.squash = 0.72;
-    this.score++;
-    sound.boing(320);
-    haptic(20);
+    this.handleTapLogic(this.ctx.me.id);
 
     if (!this.ctx.isHost) {
       this.ctx.sync.setState({ pulse: { ts: Date.now(), by: this.ctx.me.id } });
@@ -563,16 +651,12 @@ export class BalloonGame implements GameModule {
   private onStateChange = (state: any) => {
     if (this.ctx.isHost && state.pulse && state.pulse.ts !== this.lastPulseTs) {
       this.lastPulseTs = state.pulse.ts;
-      this.balloon.vy = this.jumpForce;
-      this.balloon.vx += (Math.random() - 0.5) * 2;
-      this.squash = 0.72;
-      this.score++;
-      sound.boing(360);
-      haptic(20);
+      this.handleTapLogic(state.pulse.by || 'guest');
     } else if (!this.ctx.isHost && state.balloonState) {
       this.balloon.x = state.balloonState.x;
       this.balloon.y = state.balloonState.y;
       this.score = state.balloonState.score;
+      this.comboMultiplier = state.balloonState.combo || 1;
       if (state.balloonState.over && !this.gameOver) {
         this.triggerGameOver();
       }
@@ -648,6 +732,24 @@ export class BalloonGame implements GameModule {
       this.balloon.vy = 2;
     }
 
+    // Powerup collision
+    if (this.powerup && this.powerup.active) {
+      const dx = this.balloon.x - this.powerup.x;
+      const dy = this.balloon.y - this.powerup.y;
+      if (Math.sqrt(dx * dx + dy * dy) < this.balloon.radius + this.powerup.radius) {
+        this.powerup.active = false;
+        sound.star();
+        haptic(30);
+        this.particles.spawnConfetti(this.powerup.x, this.powerup.y, 25);
+        if (this.powerup.type === 'star') {
+          this.score += 5;
+        } else {
+          this.balloon.vy = -7;
+        }
+        setTimeout(() => this.spawnPowerup(), 7000);
+      }
+    }
+
     // Floor = Game Over!
     if (this.balloon.y + this.balloon.radius >= h - 25) {
       this.triggerGameOver();
@@ -679,14 +781,38 @@ export class BalloonGame implements GameModule {
     c.fill();
     c.stroke();
 
-    // Stats HUD
+    // Stats & Combo HUD
     const elapsed = this.gameOver ? 0 : Math.floor((Date.now() - this.startTime) / 1000);
     c.fillStyle = '#2d3436';
-    c.font = 'bold 24px "Patrick Hand", cursive';
+    c.font = 'bold 22px "Patrick Hand", cursive';
     c.textAlign = 'left';
-    c.fillText(`🎈 Toques: ${this.score}`, 20, 40);
+    c.fillText(`🎈 Toques: ${this.score}`, 20, 36);
+
+    c.textAlign = 'center';
+    c.fillStyle = this.comboMultiplier > 1 ? '#d63031' : '#2d3436';
+    c.fillText(`🔥 Combo x${this.comboMultiplier}`, w / 2, 36);
+
+    c.fillStyle = '#2d3436';
     c.textAlign = 'right';
-    c.fillText(`⏱️ ${elapsed}s / 30s meta`, w - 20, 40);
+    c.fillText(`⏱️ ${elapsed}s / 30s meta`, w - 20, 36);
+
+    // Powerup floating bubble
+    if (this.powerup && this.powerup.active) {
+      c.save();
+      c.translate(this.powerup.x, this.powerup.y);
+      c.beginPath();
+      c.arc(0, 0, this.powerup.radius, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(255, 234, 167, 0.45)';
+      c.fill();
+      c.strokeStyle = '#fdcb6e';
+      c.lineWidth = 2.5;
+      c.stroke();
+      c.font = '22px sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(this.powerup.type === 'star' ? '⭐' : '🪶', 0, 1);
+      c.restore();
+    }
 
     if (!this.gameOver) {
       c.save();
@@ -716,6 +842,28 @@ export class BalloonGame implements GameModule {
       c.arc(-12, -12, 7, 0, Math.PI * 2);
       c.fillStyle = 'rgba(255,255,255,0.75)';
       c.fill();
+
+      // Animated Face
+      const isDanger = this.balloon.y > h * 0.72 || this.balloon.vy > 6;
+      if (isDanger) {
+        c.fillStyle = '#2d3436';
+        c.font = 'bold 15px sans-serif';
+        c.textAlign = 'center';
+        c.fillText('●   ●', 0, -4);
+        c.fillText('O', 0, 14);
+        c.fillStyle = '#74b9ff';
+        c.fillText('💧', 18, -12);
+      } else {
+        c.fillStyle = '#2d3436';
+        c.font = 'bold 14px sans-serif';
+        c.textAlign = 'center';
+        c.fillText('^   ^', 0, -4);
+        c.beginPath();
+        c.arc(0, 4, 7, 0.2, Math.PI - 0.2);
+        c.lineWidth = 2.5;
+        c.strokeStyle = '#2d3436';
+        c.stroke();
+      }
 
       c.restore();
     }
@@ -839,14 +987,24 @@ export class MinesweeperGame implements GameModule {
   }
 
   // ── Flood-fill reveal ──
+  private shieldMines = 1;
+
+  // ── Flood-fill reveal ──
   private reveal(r: number, c: number) {
     if (r < 0 || r >= MS_ROWS || c < 0 || c >= MS_COLS) return;
     const cell = this.board[r][c];
     if (cell.display !== 'hidden') return;
 
-    cell.display = 'revealed';
-
     if (cell.value === -1) {
+      if (this.shieldMines > 0) {
+        this.shieldMines--;
+        cell.display = 'revealed';
+        sound.thud(160);
+        haptic([60, 60, 100]);
+        showToast('🛡️ ¡Escudo Cooperativo! Mina neutralizada.');
+        return;
+      }
+
       // BOOM — reveal all mines
       this.gameOver = true;
       this.won = false;
@@ -868,9 +1026,10 @@ export class MinesweeperGame implements GameModule {
         onLobby: () => this.ctx.sync.setState({ host_location: null })
       });
       return;
-    } else {
-      sound.click();
     }
+
+    cell.display = 'revealed';
+    sound.click();
 
     if (cell.value === 0) {
       // Flood fill empty cells
@@ -971,6 +1130,27 @@ export class MinesweeperGame implements GameModule {
       }
       if (this.board[r][c].display === 'hidden') {
         this.reveal(r, c);
+      } else if (this.board[r][c].display === 'revealed' && this.board[r][c].value > 0) {
+        // Chording
+        let flags = 0;
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < MS_ROWS && nc >= 0 && nc < MS_COLS) {
+              if (this.board[nr][nc].display === 'flagged') flags++;
+            }
+          }
+        }
+        if (flags === this.board[r][c].value) {
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              const nr = r + dr, nc = c + dc;
+              if (nr >= 0 && nr < MS_ROWS && nc >= 0 && nc < MS_COLS) {
+                if (this.board[nr][nc].display === 'hidden') this.reveal(nr, nc);
+              }
+            }
+          }
+        }
       }
     }
     if (!this.gameOver) {
@@ -995,6 +1175,7 @@ export class MinesweeperGame implements GameModule {
     this.gameOver = false;
     this.won = false;
     this.generated = false;
+    this.shieldMines = 1;
     this.board = [];
     for (let r = 0; r < MS_ROWS; r++) {
       this.board[r] = [];
@@ -1216,6 +1397,12 @@ export class MinesweeperGame implements GameModule {
     c.textBaseline = 'middle';
     c.fillText(this.flagMode ? '🚩 Bandera ON' : '👆 Revelar', btnX + btnW / 2, btnY + btnH / 2);
 
+    // Cooperative Shield indicator
+    c.fillStyle = this.shieldMines > 0 ? '#00b894' : '#b2bec3';
+    c.font = `bold ${btnH * 0.45}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    c.fillText(this.shieldMines > 0 ? '🛡️ Escudo x1' : '🛡️ Usado', w * 0.58, btnY + btnH / 2);
+
     // Mine counter
     let flagCount = 0;
     for (let r = 0; r < MS_ROWS; r++) {
@@ -1277,6 +1464,7 @@ export class CrystalBridgeGame implements GameModule {
   private ctx!: GameContext;
   private animId = 0;
   private canvasCtx!: CanvasRenderingContext2D;
+  private particles = new ParticleSystem();
 
   private bridge: BridgeRow[] = [];
   private avatarRow = -1;       // -1 = start platform, 0..7 = on bridge, 8 = finish
@@ -1284,9 +1472,20 @@ export class CrystalBridgeGame implements GameModule {
   private lives = CB_LIVES;
   private gameOver = false;
   private won = false;
-  private revealed: boolean[][] = []; // which tiles have been stepped on (broken or safe)
+  private revealed: boolean[][] = []; // which tiles have been stepped on
   private shakeTimer = 0;
   private lastActionTs = 0;
+
+  // Jump animation state
+  private avatarX = 0;
+  private avatarY = 0;
+  private targetAvatarX = 0;
+  private targetAvatarY = 0;
+  private jumpProgress = 1; // 1 = landed
+  private isJumping = false;
+
+  // Host guide ping beacon
+  private pingBeacon: { row: number, side: 'left' | 'right', timer: number } | null = null;
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
@@ -1297,6 +1496,9 @@ export class CrystalBridgeGame implements GameModule {
     this.avatarRow = -1;
     this.avatarSide = null;
     this.shakeTimer = 0;
+    this.jumpProgress = 1;
+    this.isJumping = false;
+    this.pingBeacon = null;
 
     // Generate bridge (Host only decides, then broadcasts)
     this.bridge = [];
@@ -1316,7 +1518,6 @@ export class CrystalBridgeGame implements GameModule {
     this.loop();
   }
 
-  // ── Pointer: Guest picks a tile ──
   private handleRestart(swapRoles = false) {
     if (swapRoles) {
       this.ctx.isHost = !this.ctx.isHost;
@@ -1330,42 +1531,61 @@ export class CrystalBridgeGame implements GameModule {
     }
   }
 
-  // ── Pointer: Guest picks a tile ──
   private onPointerDown = (e: PointerEvent) => {
     if (this.gameOver || this.won) {
       this.handleRestart();
       return;
     }
 
-    // Only Guest moves the avatar
-    if (this.ctx.isHost) return;
-
     const rect = this.ctx.canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
     const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
 
-    // Left or right half?
+    // HOST GUIDE TOOL: Host taps safe or unrevealed tile to ping a beacon for Guest
+    if (this.ctx.isHost) {
+      const topPad = h * 0.08;
+      const botPad = h * 0.12;
+      const bridgeH = h - topPad - botPad;
+      const rowH = bridgeH / (CB_ROWS + 2);
+      const clickedRow = Math.floor((py - topPad) / rowH) - 1;
+
+      if (clickedRow >= 0 && clickedRow < CB_ROWS) {
+        const side: 'left' | 'right' = px < w / 2 ? 'left' : 'right';
+        this.pingBeacon = { row: clickedRow, side, timer: 80 };
+        sound.click();
+        haptic(15);
+        this.ctx.sync.setState({
+          cbPing: { row: clickedRow, side, ts: Date.now(), by: this.ctx.me.id }
+        });
+      }
+      return;
+    }
+
+    // GUEST MOVER: Guest steps forward onto chosen side
+    if (this.isJumping) return; // Prevent double jumping while airborne
+
     const side: 'left' | 'right' = px < w / 2 ? 'left' : 'right';
-
     this.ctx.sync.setState({
       cbStep: { side, ts: Date.now(), by: this.ctx.me.id }
     });
   };
 
-  // ── Host processes steps ──
   private processStep(side: 'left' | 'right') {
     if (this.gameOver || this.won) return;
 
     const nextRow = this.avatarRow + 1;
 
     if (nextRow >= CB_ROWS) {
-      // Reached the end!
       this.avatarRow = CB_ROWS;
       this.won = true;
       sound.victory();
       haptic([50, 50, 100]);
       profileManager.unlockBadge('glass-walker');
       profileManager.addWin();
+
+      this.particles.spawnConfetti(this.ctx.canvas.width / 2, this.ctx.canvas.height * 0.15, 40);
 
       showRematchModal({
         won: true,
@@ -1387,7 +1607,7 @@ export class CrystalBridgeGame implements GameModule {
 
     if (!safe) {
       this.lives--;
-      this.shakeTimer = 20; // frames of screen shake
+      this.shakeTimer = 22;
       sound.explosion();
       haptic([100, 100, 150]);
 
@@ -1396,7 +1616,6 @@ export class CrystalBridgeGame implements GameModule {
         profileManager.resetStreak();
         sound.defeat();
 
-        // Reveal all tiles
         for (let i = 0; i < CB_ROWS; i++) {
           this.revealed[i] = [true, true];
         }
@@ -1404,13 +1623,13 @@ export class CrystalBridgeGame implements GameModule {
         showRematchModal({
           won: false,
           title: '¡Se rompió el cristal! 💔',
-          statsText: `Llegaron a la fila ${this.avatarRow + 1} de ${CB_ROWS}`,
+          statsText: `Llegaron a la baldosa ${this.avatarRow + 1} de ${CB_ROWS}`,
           canSwapRoles: true,
           onRematch: (swap) => this.handleRestart(swap),
           onLobby: () => this.ctx.sync.setState({ host_location: null })
         });
       } else {
-        // Stay on same row so player can try the other side
+        // Fallback to previous safe row so they can try the other side
         this.avatarRow = nextRow - 1;
       }
     } else {
@@ -1426,6 +1645,9 @@ export class CrystalBridgeGame implements GameModule {
     this.avatarRow = -1;
     this.avatarSide = null;
     this.shakeTimer = 0;
+    this.jumpProgress = 1;
+    this.isJumping = false;
+    this.pingBeacon = null;
     this.bridge = [];
     this.revealed = [];
     for (let i = 0; i < CB_ROWS; i++) {
@@ -1434,7 +1656,6 @@ export class CrystalBridgeGame implements GameModule {
     }
   }
 
-  // ── Sync ──
   private broadcastState() {
     this.ctx.sync.setState({
       cbState: {
@@ -1456,6 +1677,16 @@ export class CrystalBridgeGame implements GameModule {
       this.handleRestart(state.cbRestart.swapRoles);
     }
 
+    // Ping beacon received
+    if (state.cbPing && state.cbPing.ts !== this.lastActionTs) {
+      this.lastActionTs = state.cbPing.ts;
+      this.pingBeacon = { row: state.cbPing.row, side: state.cbPing.side, timer: 80 };
+      if (!this.ctx.isHost) {
+        sound.lineClear();
+        haptic([15, 30, 20]);
+      }
+    }
+
     // Host receives step from guest
     if (this.ctx.isHost && state.cbStep && state.cbStep.ts !== this.lastActionTs) {
       this.lastActionTs = state.cbStep.ts;
@@ -1465,9 +1696,9 @@ export class CrystalBridgeGame implements GameModule {
       }
     }
 
-    // Guest (and Host for mirror) receives authoritative state
+    // Guest receives authoritative state
     if (state.cbState) {
-      // Guest always syncs; Host syncs bridge layout on first load
+      const prevRow = this.avatarRow;
       if (!this.ctx.isHost) {
         this.avatarRow = state.cbState.row;
         this.avatarSide = state.cbState.side;
@@ -1475,11 +1706,7 @@ export class CrystalBridgeGame implements GameModule {
         this.gameOver = state.cbState.over;
         this.won = state.cbState.won;
         this.revealed = state.cbState.revealed;
-        // Guest does NOT receive which tiles are safe — that's the asymmetry!
-        // Actually, we do receive bridge data but we won't RENDER it for the guest.
-        // We store it so the Host render path works:
       }
-      // Both store bridge data (Host renders hints, Guest ignores them in draw)
       if (state.cbState.bridge) {
         for (let i = 0; i < CB_ROWS; i++) {
           this.bridge[i] = { leftSafe: state.cbState.bridge[i] };
@@ -1487,17 +1714,39 @@ export class CrystalBridgeGame implements GameModule {
       }
       if (state.cbState.over || state.cbState.won) {
         if (!this.ctx.isHost && state.cbState.over) {
-          this.shakeTimer = 20;
+          this.shakeTimer = 22;
         }
+      }
+      // Trigger jump if row changed
+      if (this.avatarRow !== prevRow) {
+        this.jumpProgress = 0;
+        this.isJumping = true;
       }
     }
   };
 
-  // ── Render ──
   private loop = () => {
+    this.update();
     this.draw();
     this.animId = requestAnimationFrame(this.loop);
   };
+
+  private update() {
+    if (this.pingBeacon && this.pingBeacon.timer > 0) {
+      this.pingBeacon.timer--;
+      if (this.pingBeacon.timer <= 0) this.pingBeacon = null;
+    }
+
+    if (this.isJumping) {
+      this.jumpProgress += 0.08;
+      if (this.jumpProgress >= 1) {
+        this.jumpProgress = 1;
+        this.isJumping = false;
+        // Spawn dust on landing
+        this.particles.spawnConfetti(this.avatarX, this.avatarY, 6);
+      }
+    }
+  }
 
   private draw() {
     const c = this.canvasCtx;
@@ -1515,31 +1764,35 @@ export class CrystalBridgeGame implements GameModule {
 
     c.clearRect(-10, -10, w + 20, h + 20);
 
-    // Layout
+    // Layout dimensions
     const topPad = h * 0.08;
     const botPad = h * 0.12;
     const bridgeH = h - topPad - botPad;
-    const rowH = bridgeH / (CB_ROWS + 2); // +2 for start/finish platforms
+    const rowH = bridgeH / (CB_ROWS + 2);
     const tileW = w * 0.35;
     const tileH = rowH * 0.75;
     const gapX = w * 0.06;
     const leftX = w / 2 - gapX / 2 - tileW;
     const rightX = w / 2 + gapX / 2;
 
-    // ── Role label ──
-    c.font = `bold ${w * 0.045}px 'Patrick Hand', cursive`;
+    // ── Role label & Guide hint ──
+    c.font = `bold ${w * 0.042}px 'Patrick Hand', cursive`;
     c.textAlign = 'center';
-    c.fillStyle = '#636e72';
+    c.fillStyle = '#2d3436';
     c.fillText(
-      this.ctx.isHost ? '👁️ Tú ves las baldosas seguras' : '🚶 Tú mueves al personaje',
-      w / 2, topPad * 0.6
+      this.ctx.isHost ? '👁️ Guía: Toca una baldosa para marcarla 📍' : '🚶 Caminante: Salta siguiendo las pistas',
+      w / 2, topPad * 0.55
     );
 
-    // ── Lives ──
-    c.font = `${w * 0.05}px 'Patrick Hand', cursive`;
+    // ── Lives & Progress ──
+    c.font = `${w * 0.048}px 'Patrick Hand', cursive`;
     c.textAlign = 'right';
     c.fillStyle = '#2d3436';
-    c.fillText('❤️'.repeat(this.lives) + '🖤'.repeat(CB_LIVES - this.lives), w - 16, topPad * 0.6);
+    c.fillText('❤️'.repeat(this.lives) + '🖤'.repeat(CB_LIVES - this.lives), w - 16, topPad * 0.55);
+
+    c.textAlign = 'left';
+    c.fillStyle = '#636e72';
+    c.fillText(`Paso ${Math.max(0, this.avatarRow + 1)}/${CB_ROWS}`, 16, topPad * 0.55);
 
     // ── Finish platform ──
     const finishY = topPad;
@@ -1561,10 +1814,32 @@ export class CrystalBridgeGame implements GameModule {
       const tileY = topPad + (i + 1) * rowH + (rowH - tileH) / 2;
       const rowData = this.bridge[i];
 
-      // Draw left tile
       this.drawTile(c, leftX, tileY, tileW, tileH, i, 0, rowData.leftSafe);
-      // Draw right tile
       this.drawTile(c, rightX, tileY, tileW, tileH, i, 1, !rowData.leftSafe);
+    }
+
+    // ── Ping Beacon (Host Hint) ──
+    if (this.pingBeacon && this.pingBeacon.timer > 0) {
+      const pb = this.pingBeacon;
+      const tileY = topPad + (pb.row + 1) * rowH + (rowH - tileH) / 2;
+      const bx = pb.side === 'left' ? leftX : rightX;
+      const centerX = bx + tileW / 2;
+      const centerY = tileY + tileH / 2;
+      const pulse = Math.sin(Date.now() * 0.012) * 5;
+
+      c.save();
+      c.strokeStyle = '#fdcb6e';
+      c.lineWidth = 4;
+      c.beginPath();
+      c.arc(centerX, centerY, tileW * 0.35 + pulse, 0, Math.PI * 2);
+      c.stroke();
+
+      c.fillStyle = '#e17055';
+      c.font = `bold ${tileH * 0.45}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'bottom';
+      c.fillText('📍 ¡AQUÍ!', centerX, tileY - 4);
+      c.restore();
     }
 
     // ── Start platform ──
@@ -1581,40 +1856,67 @@ export class CrystalBridgeGame implements GameModule {
     c.textAlign = 'center';
     c.fillText('🚶 INICIO', w / 2, startY + rowH * 0.4);
 
-    // ── Avatar ──
+    // ── Target Avatar Coords Calculation ──
+    let targetX = w / 2;
+    let targetY = startY + rowH * 0.4;
+
+    if (this.avatarRow === -1) {
+      targetY = startY + rowH * 0.4;
+    } else if (this.avatarRow >= CB_ROWS) {
+      targetY = finishY + rowH * 0.4;
+    } else {
+      const tileY = topPad + (this.avatarRow + 1) * rowH + rowH / 2;
+      targetY = tileY;
+      if (this.avatarSide === 'left') targetX = leftX + tileW / 2;
+      else if (this.avatarSide === 'right') targetX = rightX + tileW / 2;
+    }
+
+    // Smooth Parabolic Arc Interpolation
+    if (this.avatarX === 0 && this.avatarY === 0) {
+      this.avatarX = targetX;
+      this.avatarY = targetY;
+    }
+
+    this.targetAvatarX = targetX;
+    this.targetAvatarY = targetY;
+
+    this.avatarX += (this.targetAvatarX - this.avatarX) * 0.25;
+    this.avatarY += (this.targetAvatarY - this.avatarY) * 0.25;
+
+    // Parabolic leap height
+    const parabolicArc = Math.sin(this.jumpProgress * Math.PI) * 28;
+    const renderY = this.avatarY - parabolicArc;
+
+    // Draw avatar
     if (!this.gameOver) {
-      let avatarX = w / 2;
-      let avatarY: number;
-
-      if (this.avatarRow === -1) {
-        avatarY = startY + rowH * 0.4;
-      } else if (this.avatarRow >= CB_ROWS) {
-        avatarY = finishY + rowH * 0.4;
-      } else {
-        const tileY = topPad + (this.avatarRow + 1) * rowH + rowH / 2;
-        avatarY = tileY;
-        if (this.avatarSide === 'left') avatarX = leftX + tileW / 2;
-        else if (this.avatarSide === 'right') avatarX = rightX + tileW / 2;
-      }
-
-      // Draw avatar (simple doodle person)
-      c.font = `${rowH * 0.55}px serif`;
+      c.save();
+      c.font = `${rowH * 0.58}px serif`;
       c.textAlign = 'center';
       c.textBaseline = 'middle';
-      c.fillText('🧍', avatarX, avatarY);
+      // Shadow
+      c.fillStyle = 'rgba(0,0,0,0.15)';
+      c.beginPath();
+      c.ellipse(this.avatarX, this.avatarY + 12, 14, 6, 0, 0, Math.PI * 2);
+      c.fill();
+      // Avatar emoji
+      c.fillText('🧍', this.avatarX, renderY);
+      c.restore();
     }
+
+    // Render particle system
+    this.particles.updateAndDraw(c);
 
     // ── Instructions for Guest ──
     if (!this.ctx.isHost && !this.gameOver && !this.won) {
       c.font = `${w * 0.04}px 'Patrick Hand', cursive`;
       c.textAlign = 'center';
       c.fillStyle = '#636e72';
-      c.fillText('Toca izquierda o derecha para avanzar', w / 2, h - botPad * 0.4);
+      c.fillText('Toca izquierda o derecha para saltar 👆', w / 2, h - botPad * 0.35);
     }
 
     // ── Game Over / Win overlay ──
     if (this.gameOver || this.won) {
-      c.fillStyle = 'rgba(253,251,247,0.8)';
+      c.fillStyle = 'rgba(253,251,247,0.85)';
       c.fillRect(-10, -10, w + 20, h + 20);
 
       c.fillStyle = '#2d3436';
@@ -1623,10 +1925,10 @@ export class CrystalBridgeGame implements GameModule {
       c.textBaseline = 'middle';
       c.fillText(this.won ? '🎉' : '💔', w / 2, h * 0.35);
 
-      c.font = `bold ${w * 0.07}px 'Patrick Hand', cursive`;
+      c.font = `bold ${w * 0.075}px 'Patrick Hand', cursive`;
       c.fillText(this.won ? '¡Cruzaron el puente!' : '¡Se rompió el cristal!', w / 2, h * 0.48);
 
-      c.font = `${w * 0.04}px 'Patrick Hand', cursive`;
+      c.font = `${w * 0.045}px 'Patrick Hand', cursive`;
       c.fillStyle = '#636e72';
       c.fillText('Toca para jugar de nuevo', w / 2, h * 0.58);
     }
@@ -1643,7 +1945,6 @@ export class CrystalBridgeGame implements GameModule {
 
     if (wasRevealed) {
       if (isSafe) {
-        // Safe tile — solid glass
         c.fillStyle = 'rgba(116, 185, 255, 0.3)';
         c.strokeStyle = '#74b9ff';
         c.lineWidth = 3;
@@ -1651,14 +1952,12 @@ export class CrystalBridgeGame implements GameModule {
         c.roundRect(x, y, w, h, 6);
         c.fill();
         c.stroke();
-        // Checkmark
         c.font = `bold ${h * 0.5}px 'Patrick Hand', cursive`;
         c.textAlign = 'center';
         c.textBaseline = 'middle';
         c.fillStyle = '#00b894';
         c.fillText('✓', x + w / 2, y + h / 2);
       } else {
-        // Broken tile — shattered look
         c.fillStyle = 'rgba(255, 118, 117, 0.15)';
         c.strokeStyle = '#ff7675';
         c.lineWidth = 2;
@@ -1668,7 +1967,6 @@ export class CrystalBridgeGame implements GameModule {
         c.fill();
         c.stroke();
         c.setLineDash([]);
-        // Crack lines
         c.strokeStyle = 'rgba(255,118,117,0.5)';
         c.lineWidth = 2;
         c.beginPath();
@@ -1680,7 +1978,6 @@ export class CrystalBridgeGame implements GameModule {
         c.moveTo(x + w * 0.5, y + h * 0.5);
         c.lineTo(x + w * 0.8, y + h * 0.3);
         c.stroke();
-        // X mark
         c.font = `bold ${h * 0.4}px 'Patrick Hand', cursive`;
         c.textAlign = 'center';
         c.textBaseline = 'middle';
@@ -1688,11 +1985,9 @@ export class CrystalBridgeGame implements GameModule {
         c.fillText('✗', x + w / 2, y + h / 2);
       }
     } else {
-      // Unrevealed tile — both look identical to Guest
-      // Host sees a subtle hint
       const isHostHint = this.ctx.isHost && isSafe;
 
-      c.fillStyle = isHostHint ? 'rgba(85, 239, 196, 0.18)' : 'rgba(200, 200, 200, 0.25)';
+      c.fillStyle = isHostHint ? 'rgba(85, 239, 196, 0.22)' : 'rgba(200, 200, 200, 0.25)';
       c.strokeStyle = '#2d3436';
       c.lineWidth = 2.5;
       c.beginPath();
@@ -1712,15 +2007,14 @@ export class CrystalBridgeGame implements GameModule {
       c.lineTo(x + w * 0.25, y + h * 0.35);
       c.stroke();
 
-      // Host sees a tiny green dot
+      // Host sees a radiant green beacon marker
       if (isHostHint) {
-        c.fillStyle = 'rgba(0, 184, 148, 0.6)';
+        c.fillStyle = 'rgba(0, 184, 148, 0.85)';
         c.beginPath();
-        c.arc(x + w - 10, y + 10, 4, 0, Math.PI * 2);
+        c.arc(x + w - 12, y + 12, 5, 0, Math.PI * 2);
         c.fill();
       }
 
-      // Label
       c.font = `${h * 0.3}px 'Patrick Hand', cursive`;
       c.textAlign = 'center';
       c.textBaseline = 'middle';
@@ -1755,6 +2049,9 @@ interface Star {
   vy: number;
   size: number;
   hue: number;
+  type: 'normal' | 'golden' | 'chrono';
+  tappedBy?: string;
+  tappedTs?: number;
 }
 
 interface StarTap {
@@ -1763,26 +2060,30 @@ interface StarTap {
   by: string;
 }
 
-const SF_STAR_COUNT = 5;
-const SF_COORDINATION_WINDOW = 250; // ms
+const SF_STAR_COUNT = 6;
+const SF_COORDINATION_WINDOW = 350; // ms window for synchronization
+const SF_ROUND_SECONDS = 45;
 
 export class StarFishingGame implements GameModule {
   private ctx!: GameContext;
   private animId = 0;
   private canvasCtx!: CanvasRenderingContext2D;
+  private particles = new ParticleSystem();
 
   private stars: Star[] = [];
   private score = 0;
-  private lastTaps: Record<string, StarTap> = {}; // starId -> last tap data
-  private feedback: { x: number, y: number, text: string, timer: number }[] = [];
+  private timeLeft = SF_ROUND_SECONDS;
+  private gameOver = false;
+  private won = false;
+  private lastTaps: Record<string, StarTap> = {};
+  private feedback: { x: number, y: number, text: string, color: string, timer: number }[] = [];
   private lastSyncTs = 0;
+  private secondTimer: any = null;
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
     this.canvasCtx = ctx.canvas.getContext('2d')!;
-    this.score = 0;
-    this.stars = [];
-    this.feedback = [];
+    this.restart();
 
     ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
     ctx.sync.on('stateChange', this.onStateChange);
@@ -1791,6 +2092,15 @@ export class StarFishingGame implements GameModule {
       for (let i = 0; i < SF_STAR_COUNT; i++) {
         this.stars.push(this.createStar());
       }
+      this.secondTimer = setInterval(() => {
+        if (!this.gameOver && this.timeLeft > 0) {
+          this.timeLeft--;
+          if (this.timeLeft <= 0) {
+            this.handleTimeUp();
+          }
+          this.broadcastState();
+        }
+      }, 1000);
       this.broadcastState();
     }
 
@@ -1800,45 +2110,112 @@ export class StarFishingGame implements GameModule {
   private createStar(): Star {
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
+    const roll = Math.random();
+    let type: 'normal' | 'golden' | 'chrono' = 'normal';
+    if (roll < 0.2) type = 'golden';
+    else if (roll < 0.3) type = 'chrono';
+
     return {
       id: Math.random().toString(36).substring(2, 9),
-      x: Math.random() * w,
-      y: Math.random() * h,
-      vx: (Math.random() - 0.5) * 2,
-      vy: (Math.random() - 0.5) * 2,
-      size: 25 + Math.random() * 15,
-      hue: Math.random() * 360
+      x: 30 + Math.random() * (w - 60),
+      y: 70 + Math.random() * (h - 140),
+      vx: (Math.random() - 0.5) * (type === 'golden' ? 2.8 : 2.0),
+      vy: (Math.random() - 0.5) * (type === 'golden' ? 2.8 : 2.0),
+      size: type === 'golden' ? 32 : type === 'chrono' ? 28 : 25 + Math.random() * 8,
+      hue: type === 'golden' ? 45 : type === 'chrono' ? 180 : Math.random() * 360,
+      type
     };
   }
 
+  private handleTimeUp() {
+    this.gameOver = true;
+    this.won = this.score >= 15;
+
+    if (this.won) {
+      sound.victory();
+      haptic([50, 50, 100]);
+      profileManager.unlockBadge('star-catcher');
+      profileManager.addWin();
+    } else {
+      sound.defeat();
+      profileManager.resetStreak();
+    }
+
+    showRematchModal({
+      won: this.won,
+      title: this.won ? '¡Pescadores de Élite! ⭐' : '¡Tiempo Agotado! ⏱️',
+      statsText: `Estrellas pescadas: ${this.score} ${this.won ? '(¡Meta de 15 superada!)' : '(Meta: 15)'}`,
+      onRematch: () => this.handleRestart(),
+      onLobby: () => this.ctx.sync.setState({ host_location: null })
+    });
+  }
+
+  private handleRestart() {
+    this.restart();
+    if (this.ctx.isHost) {
+      this.broadcastState();
+    } else {
+      this.ctx.sync.setState({ sfRestart: { ts: Date.now() } });
+    }
+  }
+
+  private restart() {
+    this.score = 0;
+    this.timeLeft = SF_ROUND_SECONDS;
+    this.gameOver = false;
+    this.won = false;
+    this.stars = [];
+    this.feedback = [];
+    this.lastTaps = {};
+    if (this.ctx && this.ctx.isHost) {
+      for (let i = 0; i < SF_STAR_COUNT; i++) {
+        this.stars.push(this.createStar());
+      }
+    }
+  }
+
   private onPointerDown = (e: PointerEvent) => {
+    if (this.gameOver) {
+      this.handleRestart();
+      return;
+    }
+
     const rect = this.ctx.canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
 
-    // Check collisions with stars
+    // Check hit on stars
     for (const star of this.stars) {
       const dx = px - star.x;
       const dy = py - star.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (dist < star.size * 1.5) {
-        // Tap hit!
+      if (dist < star.size * 1.6) {
+        star.tappedBy = this.ctx.me.id;
+        star.tappedTs = Date.now();
+
         this.ctx.sync.setState({
           sfTap: { id: star.id, ts: Date.now(), by: this.ctx.me.id }
         });
-        // Visual feedback for local player
-        this.addFeedback(star.x, star.y, '✨');
+        sound.click();
+        haptic(15);
+        this.addFeedback(star.x, star.y, '¡Tocado! ⚡', '#0984e3');
         break;
       }
     }
   };
 
-  private addFeedback(x: number, y: number, text: string) {
-    this.feedback.push({ x, y, text, timer: 30 });
+  private addFeedback(x: number, y: number, text: string, color = '#2d3436') {
+    this.feedback.push({ x, y, text, color, timer: 35 });
   }
 
   private onStateChange = (state: any) => {
+    if (state.sfRestart && state.sfRestart.ts !== this.lastSyncTs) {
+      this.lastSyncTs = state.sfRestart.ts;
+      this.restart();
+      if (this.ctx.isHost) this.broadcastState();
+    }
+
     if (this.ctx.isHost && state.sfTap && state.sfTap.ts !== this.lastSyncTs) {
       this.lastSyncTs = state.sfTap.ts;
       this.processTap(state.sfTap);
@@ -1847,48 +2224,83 @@ export class StarFishingGame implements GameModule {
     if (!this.ctx.isHost && state.sfState) {
       this.stars = state.sfState.stars;
       this.score = state.sfState.score;
+      this.timeLeft = state.sfState.timeLeft;
+      this.gameOver = state.sfState.over;
+      this.won = state.sfState.won;
       if (state.sfState.hit) {
-        this.addFeedback(state.sfState.hit.x, state.sfState.hit.y, '¡PESCADA! ⭐');
+        const h = state.sfState.hit;
+        this.particles.spawnConfetti(h.x, h.y, h.type === 'golden' ? 35 : 18);
+        this.addFeedback(h.x, h.y, h.text, h.color);
       }
     }
   };
 
   private processTap(tap: StarTap) {
+    if (this.gameOver) return;
+
     const existing = this.lastTaps[tap.id];
-    
+    const targetStar = this.stars.find(s => s.id === tap.id);
+
+    if (targetStar) {
+      targetStar.tappedBy = tap.by;
+      targetStar.tappedTs = tap.ts;
+    }
+
     if (existing && existing.by !== tap.by) {
       const diff = Math.abs(tap.ts - existing.ts);
       if (diff < SF_COORDINATION_WINDOW) {
-        // SUCCESS! Coordination achieved
-        this.score++;
-        sound.star();
-        haptic(25);
+        const starIdx = this.stars.findIndex(s => s.id === tap.id);
+        if (starIdx !== -1) {
+          const s = this.stars[starIdx];
+          const hitX = s.x;
+          const hitY = s.y;
+          let pts = 1;
+          let feedbackText = '+1 ⭐';
+          let feedbackColor = '#00b894';
 
-        // Remove star and replace
-        const idx = this.stars.findIndex(s => s.id === tap.id);
-        if (idx !== -1) {
-          const hitX = this.stars[idx].x;
-          const hitY = this.stars[idx].y;
-          this.stars.splice(idx, 1);
+          if (s.type === 'golden') {
+            pts = 3;
+            feedbackText = '¡SUPER COMBO! +3 ✨';
+            feedbackColor = '#f39c12';
+            sound.victory();
+            haptic([40, 50, 80]);
+          } else if (s.type === 'chrono') {
+            this.timeLeft = Math.min(SF_ROUND_SECONDS, this.timeLeft + 8);
+            feedbackText = '+8s TIEMPO ⏱️';
+            feedbackColor = '#00cec9';
+            sound.lineClear();
+            haptic(30);
+          } else {
+            sound.star();
+            haptic(25);
+          }
+
+          this.score += pts;
+          this.particles.spawnConfetti(hitX, hitY, s.type === 'golden' ? 35 : 20);
+          this.addFeedback(hitX, hitY, feedbackText, feedbackColor);
+
+          // Replace star
+          this.stars.splice(starIdx, 1);
           this.stars.push(this.createStar());
           delete this.lastTaps[tap.id];
-          
-          this.broadcastState({ x: hitX, y: hitY });
+
+          this.broadcastState({ x: hitX, y: hitY, type: s.type, text: feedbackText, color: feedbackColor });
           return;
         }
       }
     }
-    
-    // Store tap for future coordination
+
     this.lastTaps[tap.id] = tap;
-    sound.click();
   }
 
-  private broadcastState(hit?: { x: number, y: number }) {
+  private broadcastState(hit?: { x: number, y: number, type: string, text: string, color: string }) {
     this.ctx.sync.setState({
       sfState: {
         stars: this.stars,
         score: this.score,
+        timeLeft: this.timeLeft,
+        over: this.gameOver,
+        won: this.won,
         hit,
         ts: Date.now()
       }
@@ -1905,24 +2317,23 @@ export class StarFishingGame implements GameModule {
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
 
-    if (this.ctx.isHost) {
+    if (this.ctx.isHost && !this.gameOver) {
       for (const star of this.stars) {
         star.x += star.vx;
         star.y += star.vy;
 
-        // Bounce
-        if (star.x < 0 || star.x > w) star.vx *= -1;
-        if (star.y < 0 || star.y > h) star.vy *= -1;
+        if (star.x < 25) { star.x = 25; star.vx = Math.abs(star.vx); }
+        if (star.x > w - 25) { star.x = w - 25; star.vx = -Math.abs(star.vx); }
+        if (star.y < 65) { star.y = 65; star.vy = Math.abs(star.vy); }
+        if (star.y > h - 45) { star.y = h - 45; star.vy = -Math.abs(star.vy); }
       }
-      
-      // Periodic sync of positions
+
       if (Math.random() < 0.05) this.broadcastState();
     }
 
-    // Update feedback
     for (let i = this.feedback.length - 1; i >= 0; i--) {
       this.feedback[i].timer--;
-      this.feedback[i].y -= 1;
+      this.feedback[i].y -= 1.2;
       if (this.feedback[i].timer <= 0) this.feedback.splice(i, 1);
     }
   }
@@ -1934,41 +2345,103 @@ export class StarFishingGame implements GameModule {
 
     c.clearRect(0, 0, w, h);
 
-    // Score
-    c.font = `bold ${w * 0.06}px 'Patrick Hand', cursive`;
+    // ── Top HUD ──
+    c.font = `bold ${w * 0.05}px 'Patrick Hand', cursive`;
     c.fillStyle = '#2d3436';
+    c.textAlign = 'left';
+    c.fillText(`⭐ Puntos: ${this.score}`, 20, 42);
+
+    c.textAlign = 'right';
+    c.fillStyle = this.timeLeft <= 10 ? '#d63031' : '#2d3436';
+    c.fillText(`⏱️ ${this.timeLeft}s`, w - 20, 42);
+
     c.textAlign = 'center';
-    c.fillText(`Estrellas Pescadas: ${this.score}`, w / 2, 50);
+    c.fillStyle = '#636e72';
+    c.font = `${w * 0.038}px 'Patrick Hand', cursive`;
+    c.fillText(`Meta: 15 ⭐`, w / 2, 42);
 
     // Stars
     for (const star of this.stars) {
-      this.drawStar(c, star.x, star.y, star.size, star.hue);
+      this.drawStar(c, star);
     }
 
-    // Feedback
-    c.font = `bold ${w * 0.05}px 'Patrick Hand', cursive`;
+    // Particles
+    this.particles.updateAndDraw(c);
+
+    // Floating text feedback
+    c.font = `bold ${w * 0.048}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
     for (const f of this.feedback) {
-      c.globalAlpha = f.timer / 30;
+      c.save();
+      c.globalAlpha = Math.max(0, f.timer / 35);
+      c.fillStyle = f.color;
       c.fillText(f.text, f.x, f.y);
+      c.restore();
     }
-    c.globalAlpha = 1;
 
-    // Instructions
-    c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
+    // Bottom banner
+    c.font = `${w * 0.036}px 'Patrick Hand', cursive`;
     c.fillStyle = '#636e72';
-    c.fillText('¡Toquen la misma estrella al mismo tiempo!', w / 2, h - 30);
+    c.textAlign = 'center';
+    c.fillText('¡Toquen la misma estrella casi al unísono!', w / 2, h - 20);
+
+    // Game Over Overlay
+    if (this.gameOver) {
+      c.fillStyle = 'rgba(253,251,247,0.88)';
+      c.fillRect(0, 0, w, h);
+
+      c.fillStyle = '#2d3436';
+      c.font = `bold ${w * 0.13}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(this.won ? '🎉' : '⏱️', w / 2, h * 0.35);
+
+      c.font = `bold ${w * 0.075}px 'Patrick Hand', cursive`;
+      c.fillText(this.won ? '¡Pesca Exitosa!' : '¡Tiempo agotado!', w / 2, h * 0.48);
+
+      c.font = `${w * 0.045}px 'Patrick Hand', cursive`;
+      c.fillStyle = '#636e72';
+      c.fillText(`Capturaron ${this.score} estrellas`, w / 2, h * 0.56);
+      c.fillText('Toca para jugar de nuevo', w / 2, h * 0.64);
+    }
   }
 
-  private drawStar(c: CanvasRenderingContext2D, cx: number, cy: number, size: number, hue: number) {
+  private drawStar(c: CanvasRenderingContext2D, star: Star) {
+    const cx = star.x;
+    const cy = star.y;
+    const size = star.size;
+    const now = Date.now();
+
     c.save();
     c.translate(cx, cy);
-    c.rotate(Date.now() * 0.002);
-    
+
+    // Synchronization timing ring (when primed by either player)
+    if (star.tappedTs && now - star.tappedTs < SF_COORDINATION_WINDOW) {
+      const elapsed = now - star.tappedTs;
+      const progress = elapsed / SF_COORDINATION_WINDOW;
+      const ringRadius = size * (2.2 - progress * 1.2);
+
+      c.save();
+      c.strokeStyle = '#0984e3';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.arc(0, 0, ringRadius, 0, Math.PI * 2);
+      c.stroke();
+
+      c.font = 'bold 12px "Patrick Hand", cursive';
+      c.fillStyle = '#0984e3';
+      c.textAlign = 'center';
+      c.fillText('¡TOCA YA! ⏱️', 0, -ringRadius - 4);
+      c.restore();
+    }
+
+    c.rotate(now * (star.type === 'golden' ? 0.004 : 0.002));
+
     c.beginPath();
     const spikes = 5;
     const outerRadius = size;
-    const innerRadius = size * 0.4;
-    let rot = Math.PI / 2 * 3;
+    const innerRadius = size * 0.42;
+    let rot = (Math.PI / 2) * 3;
     let x = 0;
     let y = 0;
     const step = Math.PI / spikes;
@@ -1988,23 +2461,50 @@ export class StarFishingGame implements GameModule {
     c.lineTo(0, -outerRadius);
     c.closePath();
 
-    c.fillStyle = `hsla(${hue}, 80%, 70%, 0.6)`;
+    if (star.type === 'golden') {
+      c.fillStyle = '#f1c40f';
+      c.shadowColor = '#f39c12';
+      c.shadowBlur = 10;
+    } else if (star.type === 'chrono') {
+      c.fillStyle = '#00cec9';
+      c.shadowColor = '#00cec9';
+      c.shadowBlur = 8;
+    } else {
+      c.fillStyle = `hsla(${star.hue}, 80%, 70%, 0.75)`;
+    }
     c.fill();
+    c.shadowBlur = 0;
+
     c.strokeStyle = '#2d3436';
     c.lineWidth = 2.5;
     c.stroke();
-    
-    // Doodle lines inside
-    c.beginPath();
-    c.moveTo(0,0);
-    c.lineTo(0, -outerRadius * 0.5);
-    c.stroke();
+
+    // Doodle inner icon / lines
+    if (star.type === 'golden') {
+      c.font = 'bold 14px "Patrick Hand", cursive';
+      c.fillStyle = '#2d3436';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('✨', 0, 0);
+    } else if (star.type === 'chrono') {
+      c.font = 'bold 13px "Patrick Hand", cursive';
+      c.fillStyle = '#2d3436';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('⏱️', 0, 0);
+    } else {
+      c.beginPath();
+      c.moveTo(0, 0);
+      c.lineTo(0, -outerRadius * 0.5);
+      c.stroke();
+    }
 
     c.restore();
   }
 
   destroy(): void {
     cancelAnimationFrame(this.animId);
+    if (this.secondTimer) clearInterval(this.secondTimer);
     this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.ctx.sync.off('stateChange', this.onStateChange);
   }
@@ -2021,24 +2521,35 @@ export class StarFishingGame implements GameModule {
 //   payload: { action: 'jump' | 'shield' }
 // ─────────────────────────────────────────────────────────
 interface Obstacle {
+  id: string;
   x: number;
   y: number;
   w: number;
   h: number;
 }
 
-const IG_SCROLL_SPEED = 4;
-const IG_GRAVITY = 0.6;
+interface EnergyOrb {
+  id: string;
+  x: number;
+  y: number;
+  collected: boolean;
+}
+
+const IG_SCROLL_SPEED = 4.2;
+const IG_GRAVITY = 0.58;
 const IG_LIVES = 3;
 
 export class InverseGravityGame implements GameModule {
   private ctx!: GameContext;
   private animId = 0;
   private canvasCtx!: CanvasRenderingContext2D;
+  private particles = new ParticleSystem();
 
   private obstacles: Obstacle[] = [];
+  private orbs: EnergyOrb[] = [];
   private playerY = 0;
   private playerVY = 0;
+  private playerAngle = 0;
   private gravityDir = 1; // 1 = down, -1 = up
   private lives = IG_LIVES;
   private shieldActive = false;
@@ -2046,6 +2557,12 @@ export class InverseGravityGame implements GameModule {
   private gameOver = false;
   private distance = 0;
   private lastActionTs = 0;
+  private shakeTimer = 0;
+
+  // Visual effects
+  private laserBeam: { x1: number, y1: number, x2: number, y2: number, timer: number } | null = null;
+  private floatTexts: { x: number, y: number, text: string, timer: number }[] = [];
+  private trail: { x: number, y: number, angle: number }[] = [];
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
@@ -2064,20 +2581,26 @@ export class InverseGravityGame implements GameModule {
 
   private reset() {
     this.obstacles = [];
+    this.orbs = [];
     this.playerY = this.ctx.canvas.height / 2;
     this.playerVY = 0;
+    this.playerAngle = 0;
     this.gravityDir = 1;
     this.lives = IG_LIVES;
     this.shieldActive = false;
     this.shieldTimer = 0;
     this.gameOver = false;
     this.distance = 0;
+    this.shakeTimer = 0;
+    this.laserBeam = null;
+    this.floatTexts = [];
+    this.trail = [];
   }
 
   private handleRestart(swapRoles = false) {
     if (swapRoles) {
       this.ctx.isHost = !this.ctx.isHost;
-      showToast(this.ctx.isHost ? '🚀 Ahora controlas la Gravedad' : '🛡️ Ahora controlas el Escudo');
+      showToast(this.ctx.isHost ? '🚀 Ahora controlas la Gravedad' : '⚡ Ahora disparas Láser y Escudo');
     }
     this.reset();
     if (this.ctx.isHost) {
@@ -2087,22 +2610,40 @@ export class InverseGravityGame implements GameModule {
     }
   }
 
-  private onPointerDown = () => {
+  private onPointerDown = (e: PointerEvent) => {
     if (this.gameOver) {
       this.handleRestart();
       return;
     }
 
-    // Host flips gravity, Guest shields
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
     if (this.ctx.isHost) {
+      // Host flips gravity
       this.gravityDir *= -1;
-      sound.boing(260);
+      sound.boing(280);
       haptic(20);
       this.ctx.sync.setState({ igFlip: { dir: this.gravityDir, ts: Date.now() } });
     } else {
-      if (this.shieldTimer <= 0) {
+      // Guest: Check if tapping directly on an obstacle to ZAP it with laser!
+      let zapped = false;
+      for (const obs of this.obstacles) {
+        if (px >= obs.x - 20 && px <= obs.x + obs.w + 20 && py >= obs.y - 20 && py <= obs.y + obs.h + 20) {
+          zapped = true;
+          this.triggerZap(obs.id, obs.x + obs.w / 2, obs.y + obs.h / 2);
+          this.ctx.sync.setState({
+            igZap: { id: obs.id, x: obs.x + obs.w / 2, y: obs.y + obs.h / 2, ts: Date.now() }
+          });
+          break;
+        }
+      }
+
+      // If not tapping an obstacle, trigger energy shield
+      if (!zapped && this.shieldTimer <= 0) {
         this.shieldActive = true;
-        this.shieldTimer = 100; // frames
+        this.shieldTimer = 110;
         sound.thud(160);
         haptic(25);
         this.ctx.sync.setState({ igShield: { active: true, ts: Date.now() } });
@@ -2110,23 +2651,45 @@ export class InverseGravityGame implements GameModule {
     }
   };
 
+  private triggerZap(obsId: string, targetX: number, targetY: number) {
+    const px = this.ctx.canvas.width * 0.2;
+    const py = this.playerY;
+    this.laserBeam = { x1: px, y1: py, x2: targetX, y2: targetY, timer: 12 };
+    this.particles.spawnConfetti(targetX, targetY, 18);
+    this.floatTexts.push({ x: targetX, y: targetY - 10, text: '⚡ ¡ZAP!', timer: 30 });
+    sound.lineClear();
+    haptic([20, 30, 40]);
+
+    const idx = this.obstacles.findIndex(o => o.id === obsId);
+    if (idx !== -1) {
+      this.obstacles.splice(idx, 1);
+    }
+  }
+
   private onStateChange = (state: any) => {
     if (state.igRestart && state.igRestart.ts !== this.lastActionTs) {
       this.lastActionTs = state.igRestart.ts;
       this.handleRestart(state.igRestart.swapRoles);
     }
 
+    if (state.igZap && state.igZap.ts !== this.lastActionTs) {
+      this.lastActionTs = state.igZap.ts;
+      this.triggerZap(state.igZap.id, state.igZap.x, state.igZap.y);
+      if (this.ctx.isHost) this.broadcastState();
+    }
+
     if (this.ctx.isHost && state.igShield && state.igShield.ts !== this.lastActionTs) {
       this.lastActionTs = state.igShield.ts;
       this.shieldActive = true;
-      this.shieldTimer = 100;
+      this.shieldTimer = 110;
       this.broadcastState();
     }
-    
+
     if (!this.ctx.isHost) {
       if (state.igFlip) this.gravityDir = state.igFlip.dir;
       if (state.igState) {
         this.obstacles = state.igState.obs;
+        this.orbs = state.igState.orbs || [];
         this.lives = state.igState.lives;
         this.distance = state.igState.dist;
         this.playerY = state.igState.y;
@@ -2140,6 +2703,7 @@ export class InverseGravityGame implements GameModule {
     this.ctx.sync.setState({
       igState: {
         obs: this.obstacles,
+        orbs: this.orbs,
         lives: this.lives,
         dist: Math.floor(this.distance),
         y: this.playerY,
@@ -2162,13 +2726,34 @@ export class InverseGravityGame implements GameModule {
     const h = this.ctx.canvas.height;
     const w = this.ctx.canvas.width;
 
+    // Smooth backflip rotation
+    const targetAngle = this.gravityDir === -1 ? Math.PI : 0;
+    this.playerAngle += (targetAngle - this.playerAngle) * 0.22;
+
+    // Laser & visual timers
+    if (this.laserBeam && this.laserBeam.timer > 0) {
+      this.laserBeam.timer--;
+      if (this.laserBeam.timer <= 0) this.laserBeam = null;
+    }
+
+    for (let i = this.floatTexts.length - 1; i >= 0; i--) {
+      this.floatTexts[i].timer--;
+      this.floatTexts[i].y -= 1;
+      if (this.floatTexts[i].timer <= 0) this.floatTexts.splice(i, 1);
+    }
+
+    // Motion trail
+    if (Math.random() < 0.4) {
+      this.trail.push({ x: w * 0.2, y: this.playerY, angle: this.playerAngle });
+      if (this.trail.length > 5) this.trail.shift();
+    }
+
     if (this.ctx.isHost) {
       // Physics
       this.playerVY += IG_GRAVITY * this.gravityDir;
       this.playerY += this.playerVY;
 
-      // Floor/Ceiling constraints
-      const margin = 40;
+      const margin = 42;
       if (this.playerY > h - margin) {
         this.playerY = h - margin;
         this.playerVY = 0;
@@ -2178,18 +2763,45 @@ export class InverseGravityGame implements GameModule {
         this.playerVY = 0;
       }
 
-      // Scrolling
-      this.distance += 0.1;
-      
+      this.distance += 0.12;
+
       // Spawn obstacles
-      if (Math.random() < 0.02) {
+      if (Math.random() < 0.024) {
         const side = Math.random() < 0.5 ? 'top' : 'bottom';
         this.obstacles.push({
+          id: Math.random().toString(36).substring(2, 9),
           x: w,
-          y: side === 'top' ? 0 : h - 60,
-          w: 40 + Math.random() * 40,
-          h: 60
+          y: side === 'top' ? 0 : h - 65,
+          w: 42 + Math.random() * 38,
+          h: 65
         });
+      }
+
+      // Spawn energy orbs
+      if (Math.random() < 0.012) {
+        this.orbs.push({
+          id: Math.random().toString(36).substring(2, 9),
+          x: w,
+          y: margin + Math.random() * (h - margin * 2),
+          collected: false
+        });
+      }
+
+      // Update orbs
+      for (let i = this.orbs.length - 1; i >= 0; i--) {
+        const orb = this.orbs[i];
+        orb.x -= IG_SCROLL_SPEED;
+        const dx = orb.x - (w * 0.2);
+        const dy = orb.y - this.playerY;
+        if (!orb.collected && Math.sqrt(dx * dx + dy * dy) < 32) {
+          orb.collected = true;
+          this.distance += 5;
+          sound.star();
+          haptic(20);
+          this.particles.spawnConfetti(orb.x, orb.y, 12);
+          this.floatTexts.push({ x: orb.x, y: orb.y - 10, text: '+5m ⭐', timer: 25 });
+        }
+        if (orb.x < -20 || orb.collected) this.orbs.splice(i, 1);
       }
 
       // Update obstacles & Collisions
@@ -2197,15 +2809,16 @@ export class InverseGravityGame implements GameModule {
         const obs = this.obstacles[i];
         obs.x -= IG_SCROLL_SPEED;
 
-        // Collision
-        if (!this.shieldActive && 
-            w * 0.2 < obs.x + obs.w && 
-            w * 0.2 + 30 > obs.x && 
-            this.playerY < obs.y + obs.h && 
-            this.playerY + 30 > obs.y) {
-          
+        // Collision box
+        if (!this.shieldActive &&
+            w * 0.2 + 15 > obs.x &&
+            w * 0.2 - 15 < obs.x + obs.w &&
+            this.playerY + 20 > obs.y &&
+            this.playerY - 20 < obs.y + obs.h) {
+
           this.lives--;
           this.obstacles.splice(i, 1);
+          this.shakeTimer = 20;
           sound.explosion();
           haptic([80, 80, 100]);
 
@@ -2233,7 +2846,7 @@ export class InverseGravityGame implements GameModule {
           continue;
         }
 
-        if (obs.x + obs.w < 0) this.obstacles.splice(i, 1);
+        if (obs.x + obs.w < -20) this.obstacles.splice(i, 1);
       }
 
       if (this.shieldTimer > 0) {
@@ -2241,7 +2854,7 @@ export class InverseGravityGame implements GameModule {
         if (this.shieldTimer <= 0) this.shieldActive = false;
       }
 
-      if (Math.random() < 0.1) this.broadcastState();
+      if (Math.random() < 0.08) this.broadcastState();
     }
   }
 
@@ -2250,50 +2863,60 @@ export class InverseGravityGame implements GameModule {
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
 
-    c.clearRect(0, 0, w, h);
-
-    // Grid lines (doodle style)
-    c.strokeStyle = 'rgba(0,0,0,0.05)';
-    c.lineWidth = 1;
-    for (let x = 0; x < w; x += 50) {
-      c.beginPath(); c.moveTo(x - (this.distance * 10) % 50, 0); c.lineTo(x - (this.distance * 10) % 50, h); c.stroke();
+    c.save();
+    if (this.shakeTimer > 0) {
+      this.shakeTimer--;
+      c.translate((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
     }
 
-    // HUD
-    c.font = `bold ${w * 0.05}px 'Patrick Hand', cursive`;
+    c.clearRect(-10, -10, w + 20, h + 20);
+
+    // Grid lines (doodle background)
+    c.strokeStyle = 'rgba(0,0,0,0.06)';
+    c.lineWidth = 1;
+    for (let x = 0; x < w; x += 45) {
+      c.beginPath();
+      c.moveTo(x - (this.distance * 12) % 45, 0);
+      c.lineTo(x - (this.distance * 12) % 45, h);
+      c.stroke();
+    }
+
+    // Top & Bottom boundary doodle lines
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 3;
+    c.beginPath(); c.moveTo(0, 30); c.lineTo(w, 30); c.stroke();
+    c.beginPath(); c.moveTo(0, h - 30); c.lineTo(w, h - 30); c.stroke();
+
+    // ── HUD ──
+    c.font = `bold ${w * 0.048}px 'Patrick Hand', cursive`;
     c.fillStyle = '#2d3436';
     c.textAlign = 'left';
-    c.fillText(`❤️`.repeat(this.lives), 20, 40);
+    c.fillText('❤️'.repeat(this.lives) + '🖤'.repeat(IG_LIVES - this.lives), 20, 24);
+
     c.textAlign = 'right';
-    c.fillText(`${Math.floor(this.distance)}m`, w - 20, 40);
+    c.fillText(`🚀 ${Math.floor(this.distance)}m / 300m`, w - 20, 24);
 
-    // Player (Doodle stick figure)
-    const px = w * 0.2;
-    const py = this.playerY;
-    
-    c.save();
-    c.translate(px, py);
-    if (this.gravityDir === -1) c.scale(1, -1);
-    
-    // Head
-    c.beginPath(); c.arc(0, -15, 6, 0, Math.PI * 2); c.stroke();
-    // Body
-    c.beginPath(); c.moveTo(0, -9); c.lineTo(0, 5); c.stroke();
-    // Arms
-    c.beginPath(); c.moveTo(-10, -5); c.lineTo(10, -5); c.stroke();
-    // Legs
-    c.beginPath(); c.moveTo(0, 5); c.lineTo(-7, 15); c.stroke();
-    c.beginPath(); c.moveTo(0, 5); c.lineTo(7, 15); c.stroke();
-    
-    c.restore();
-
-    // Shield effect
-    if (this.shieldActive) {
+    // Laser beam
+    if (this.laserBeam) {
+      c.save();
+      c.strokeStyle = '#fdcb6e';
+      c.lineWidth = 4;
+      c.setLineDash([6, 4]);
       c.beginPath();
-      c.arc(px, py, 35, 0, Math.PI * 2);
-      c.strokeStyle = 'rgba(116, 185, 255, 0.6)';
-      c.lineWidth = 5;
+      c.moveTo(this.laserBeam.x1, this.laserBeam.y1);
+      c.lineTo(this.laserBeam.x2, this.laserBeam.y2);
       c.stroke();
+      c.restore();
+    }
+
+    // Energy orbs
+    for (const orb of this.orbs) {
+      c.save();
+      c.font = '22px serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('⭐', orb.x, orb.y);
+      c.restore();
     }
 
     // Obstacles
@@ -2302,35 +2925,118 @@ export class InverseGravityGame implements GameModule {
       this.drawObstacle(c, obs.x, obs.y, obs.w, obs.h);
     }
 
-    // Game Over
-    if (this.gameOver) {
-      c.fillStyle = 'rgba(253,251,247,0.85)';
-      c.fillRect(0, 0, w, h);
-      c.fillStyle = '#2d3436';
-      c.font = `bold ${w * 0.1}px 'Patrick Hand', cursive`;
-      c.textAlign = 'center';
-      c.fillText('¡CAÍDA LIBRE!', w / 2, h / 2);
-      c.font = `${w * 0.05}px 'Patrick Hand', cursive`;
-      c.fillText('Toca para reintentar', w / 2, h / 2 + 50);
+    // Runner Ghost Trail
+    for (let i = 0; i < this.trail.length; i++) {
+      const t = this.trail[i];
+      c.save();
+      c.globalAlpha = (i + 1) * 0.08;
+      c.translate(t.x, t.y);
+      c.rotate(t.angle);
+      this.drawStickFigure(c);
+      c.restore();
     }
 
-    // Role labels
+    // Player with Backflip Rotation
+    const px = w * 0.2;
+    const py = this.playerY;
+
+    c.save();
+    c.translate(px, py);
+    c.rotate(this.playerAngle);
+    this.drawStickFigure(c);
+    c.restore();
+
+    // Shield bubble
+    if (this.shieldActive) {
+      c.save();
+      c.beginPath();
+      c.arc(px, py, 32, 0, Math.PI * 2);
+      c.strokeStyle = '#0984e3';
+      c.lineWidth = 3.5;
+      c.fillStyle = 'rgba(116, 185, 255, 0.22)';
+      c.fill();
+      c.stroke();
+      c.restore();
+    }
+
+    // Particles
+    this.particles.updateAndDraw(c);
+
+    // Floating text
+    c.font = `bold ${w * 0.045}px 'Patrick Hand', cursive`;
+    c.textAlign = 'center';
+    for (const ft of this.floatTexts) {
+      c.save();
+      c.globalAlpha = ft.timer / 30;
+      c.fillStyle = '#d63031';
+      c.fillText(ft.text, ft.x, ft.y);
+      c.restore();
+    }
+
+    // Role instructions
     c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
     c.fillStyle = '#636e72';
     c.textAlign = 'center';
-    c.fillText(this.ctx.isHost ? 'Host: Toca para invertir gravedad' : 'Guest: Toca para activar escudo', w / 2, h - 20);
+    c.fillText(
+      this.ctx.isHost
+        ? 'Host: Toca para cambiar la gravedad 🔄'
+        : 'Guest: ¡Toca obstáculos para destruirlos ⚡ o espacio para escudo 🛡️!',
+      w / 2, h - 10
+    );
+
+    // Game Over Overlay
+    if (this.gameOver) {
+      c.fillStyle = 'rgba(253,251,247,0.85)';
+      c.fillRect(-10, -10, w + 20, h + 20);
+
+      const won = Math.floor(this.distance) >= 300;
+      c.fillStyle = '#2d3436';
+      c.font = `bold ${w * 0.12}px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.fillText(won ? '🎉' : '💥', w / 2, h * 0.35);
+
+      c.font = `bold ${w * 0.075}px 'Patrick Hand', cursive`;
+      c.fillText(won ? '¡Meta Cumplida!' : '¡Caída Libre!', w / 2, h * 0.48);
+
+      c.font = `${w * 0.045}px 'Patrick Hand', cursive`;
+      c.fillStyle = '#636e72';
+      c.fillText(`Recorrieron ${Math.floor(this.distance)} metros`, w / 2, h * 0.58);
+      c.fillText('Toca para reintentar', w / 2, h * 0.66);
+    }
+
+    c.restore();
+  }
+
+  private drawStickFigure(c: CanvasRenderingContext2D) {
+    c.strokeStyle = '#2d3436';
+    c.lineWidth = 2.5;
+
+    // Head
+    c.beginPath(); c.arc(0, -14, 6, 0, Math.PI * 2); c.stroke();
+    // Body
+    c.beginPath(); c.moveTo(0, -8); c.lineTo(0, 6); c.stroke();
+    // Arms
+    c.beginPath(); c.moveTo(-10, -3); c.lineTo(10, -3); c.stroke();
+    // Legs
+    c.beginPath(); c.moveTo(0, 6); c.lineTo(-8, 16); c.stroke();
+    c.beginPath(); c.moveTo(0, 6); c.lineTo(8, 16); c.stroke();
   }
 
   private drawObstacle(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+    c.fillStyle = 'rgba(45, 52, 54, 0.15)';
+    c.fillRect(x, y, w, h);
+
     c.strokeStyle = '#2d3436';
     c.lineWidth = 2.5;
     c.strokeRect(x, y, w, h);
-    
-    // Scribble fill
-    for (let i = 0; i < w; i += 8) {
+
+    // Hazard warning stripes
+    c.strokeStyle = '#ff7675';
+    c.lineWidth = 2;
+    for (let i = 0; i < w; i += 10) {
       c.beginPath();
       c.moveTo(x + i, y);
-      c.lineTo(x + i + 5, y + h);
+      c.lineTo(x + i + 6, y + h);
       c.stroke();
     }
   }
@@ -2355,10 +3061,10 @@ export class InverseGravityGame implements GameModule {
 // ── Hockey Constants ──
 const FH_MALLET_R = 28;
 const FH_PUCK_R = 16;
-const FH_MAX_SPEED = 14;
-const FH_FRICTION = 0.985;
-const FH_AI_SPEED = 3.5;
-const FH_GOAL_W_RATIO = 0.4; // goal width as fraction of canvas width
+const FH_MAX_SPEED = 16;
+const FH_FRICTION = 0.986;
+const FH_AI_SPEED = 3.6;
+const FH_GOAL_W_RATIO = 0.42;
 
 interface Vec2 { x: number; y: number; }
 interface Disc extends Vec2 { vx: number; vy: number; r: number; }
@@ -2367,6 +3073,7 @@ export class FingerHockeyGame implements GameModule {
   private ctx!: GameContext;
   private animId = 0;
   private canvasCtx!: CanvasRenderingContext2D;
+  private particles = new ParticleSystem();
 
   // Discs
   private puck: Disc = { x: 0, y: 0, vx: 0, vy: 0, r: FH_PUCK_R };
@@ -2379,6 +3086,12 @@ export class FingerHockeyGame implements GameModule {
   private p1Prev: Vec2 = { x: 0, y: 0 };
   private p2Prev: Vec2 = { x: 0, y: 0 };
 
+  // Super hit / Fireball mechanic
+  private isSuperHit = false;
+  private puckTrail: { x: number, y: number, isSuper: boolean }[] = [];
+  private shakeTimer = 0;
+  private netWobble = 0;
+
   // Score
   private scoreHumans = 0;
   private scoreAI = 0;
@@ -2387,9 +3100,9 @@ export class FingerHockeyGame implements GameModule {
   private goalMessage = '';
   private matchEnded = false;
 
+  // AI mood
+  private aiMood = '🤖';
 
-  // Pointer tracking
-  private activePointer: number | null = null;
   private lastMalletTs = 0;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -2399,11 +3112,14 @@ export class FingerHockeyGame implements GameModule {
     this.scoreHumans = 0;
     this.scoreAI = 0;
     this.goalFlashTimer = 0;
+    this.matchEnded = false;
+    this.shakeTimer = 0;
+    this.netWobble = 0;
+    this.puckTrail = [];
 
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
 
-    // Initial positions
     this.resetPuck(w, h);
     this.p1Mallet = { x: w * 0.3, y: h * 0.8 };
     this.p2Mallet = { x: w * 0.7, y: h * 0.8 };
@@ -2419,11 +3135,10 @@ export class FingerHockeyGame implements GameModule {
 
     ctx.sync.on('stateChange', this.onStateChange);
 
-    // Host broadcasts physics state periodically
     if (ctx.isHost) {
       this.syncInterval = setInterval(() => {
         this.broadcastState();
-      }, 50); // 20 times/sec
+      }, 50);
     }
 
     this.loop();
@@ -2434,9 +3149,10 @@ export class FingerHockeyGame implements GameModule {
     this.puck.y = h / 2;
     this.puck.vx = (Math.random() - 0.5) * 4;
     this.puck.vy = (Math.random() < 0.5 ? -1 : 1) * 3;
+    this.isSuperHit = false;
+    this.puckTrail = [];
   }
 
-  // ── Pointer handlers: each player drags their own mallet ──
   private onPointerDown = (e: PointerEvent) => {
     if (this.matchEnded) {
       this.handleRestart();
@@ -2449,9 +3165,7 @@ export class FingerHockeyGame implements GameModule {
     this.handlePointer(e);
   };
 
-  private onPointerUp = (_e: PointerEvent) => {
-    // Nothing special needed
-  };
+  private onPointerUp = (_e: PointerEvent) => {};
 
   private handlePointer(e: PointerEvent) {
     const rect = this.ctx.canvas.getBoundingClientRect();
@@ -2460,47 +3174,47 @@ export class FingerHockeyGame implements GameModule {
     const h = this.ctx.canvas.height;
     const w = this.ctx.canvas.width;
 
-    // Only allow controlling mallets in the bottom half
     if (py < h * 0.45) return;
 
-    // Clamp to playable area
     const cx = Math.max(FH_MALLET_R, Math.min(w - FH_MALLET_R, px));
     const cy = Math.max(h * 0.45, Math.min(h - FH_MALLET_R, py));
 
-    // Host controls p1 (bottom-left area), Guest controls p2 (bottom-right area)
     if (this.ctx.isHost) {
       this.p1Prev = { ...this.p1Mallet };
       this.p1Mallet = { x: cx, y: cy };
     } else {
-      // Send mallet pos to host
       this.ctx.sync.setState({
         fhMallet: { x: cx, y: cy, ts: Date.now(), by: this.ctx.me.id }
       });
-      // Local prediction
       this.p2Prev = { ...this.p2Mallet };
       this.p2Mallet = { x: cx, y: cy };
     }
   }
 
-  // ── AI Logic ──
   private updateAI(w: number, h: number) {
     const topLimit = FH_MALLET_R + 8;
     const botLimit = h * 0.45;
 
-    // AI1: tracks puck with some lag, stays on left side
-    const targetX1 = Math.max(FH_MALLET_R, Math.min(w * 0.48, this.puck.x - 30));
-    const targetY1 = Math.max(topLimit, Math.min(botLimit, this.puck.y < botLimit ? this.puck.y : h * 0.15));
-    this.ai1.x += (targetX1 - this.ai1.x) * 0.06 * FH_AI_SPEED * 0.3;
-    this.ai1.y += (targetY1 - this.ai1.y) * 0.05 * FH_AI_SPEED * 0.3;
+    // AI reacts to incoming puck
+    if (this.puck.vy < -5 && this.isSuperHit) {
+      this.aiMood = '🤖⚡';
+    } else if (this.goalFlashTimer > 0) {
+      this.aiMood = this.scoreHumans > this.scoreAI ? '🤖💦' : '😎';
+    } else {
+      this.aiMood = '🤖';
+    }
 
-    // AI2: tracks puck more aggressively, stays on right side
-    const targetX2 = Math.max(w * 0.52, Math.min(w - FH_MALLET_R, this.puck.x + 30));
+    const targetX1 = Math.max(FH_MALLET_R, Math.min(w * 0.48, this.puck.x - 25));
+    const targetY1 = Math.max(topLimit, Math.min(botLimit, this.puck.y < botLimit ? this.puck.y : h * 0.16));
+    this.ai1.x += (targetX1 - this.ai1.x) * 0.065 * FH_AI_SPEED * 0.3;
+    this.ai1.y += (targetY1 - this.ai1.y) * 0.055 * FH_AI_SPEED * 0.3;
+
+    const targetX2 = Math.max(w * 0.52, Math.min(w - FH_MALLET_R, this.puck.x + 25));
     const targetY2 = Math.max(topLimit, Math.min(botLimit, this.puck.y < botLimit ? this.puck.y : h * 0.22));
-    this.ai2.x += (targetX2 - this.ai2.x) * 0.07 * FH_AI_SPEED * 0.3;
-    this.ai2.y += (targetY2 - this.ai2.y) * 0.06 * FH_AI_SPEED * 0.3;
+    this.ai2.x += (targetX2 - this.ai2.x) * 0.075 * FH_AI_SPEED * 0.3;
+    this.ai2.y += (targetY2 - this.ai2.y) * 0.065 * FH_AI_SPEED * 0.3;
   }
 
-  // ── Physics ──
   private resolveMalletCollision(mallet: Vec2, prevMallet: Vec2) {
     const dx = this.puck.x - mallet.x;
     const dy = this.puck.y - mallet.y;
@@ -2508,18 +3222,31 @@ export class FingerHockeyGame implements GameModule {
     const minDist = FH_MALLET_R + FH_PUCK_R;
 
     if (dist < minDist && dist > 0) {
-      // Push puck out
       const nx = dx / dist;
       const ny = dy / dist;
       const overlap = minDist - dist;
       this.puck.x += nx * overlap;
       this.puck.y += ny * overlap;
 
-      // Transfer mallet velocity to puck
       const mvx = mallet.x - prevMallet.x;
       const mvy = mallet.y - prevMallet.y;
-      this.puck.vx = nx * 8 + mvx * 0.6;
-      this.puck.vy = ny * 8 + mvy * 0.6;
+      const malletSpeed = Math.sqrt(mvx * mvx + mvy * mvy);
+
+      // Check Smash Shot!
+      if (malletSpeed > 8.5) {
+        this.isSuperHit = true;
+        this.shakeTimer = 12;
+        this.puck.vx = nx * 12 + mvx * 0.85;
+        this.puck.vy = ny * 12 + mvy * 0.85;
+        sound.explosion();
+        haptic([40, 60, 80]);
+        this.particles.spawnConfetti(this.puck.x, this.puck.y, 14);
+      } else {
+        this.puck.vx = nx * 7 + mvx * 0.6;
+        this.puck.vy = ny * 7 + mvy * 0.6;
+        sound.thud(220);
+        haptic(15);
+      }
     }
   }
 
@@ -2535,26 +3262,30 @@ export class FingerHockeyGame implements GameModule {
       const overlap = minDist - dist;
       this.puck.x += nx * overlap;
       this.puck.y += ny * overlap;
-      this.puck.vx = nx * 6;
-      this.puck.vy = ny * 6;
+      this.puck.vx = nx * 6.5;
+      this.puck.vy = ny * 6.5;
+      this.isSuperHit = false;
+      sound.thud(180);
+      haptic(15);
     }
   }
 
   private update() {
-    if (!this.ctx.isHost) return; // Only host runs physics
+    if (!this.ctx.isHost) return;
 
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
+
+    if (this.netWobble > 0) this.netWobble--;
 
     if (this.goalFlashTimer > 0) {
       this.goalFlashTimer--;
       if (this.goalFlashTimer === 0) {
         this.resetPuck(w, h);
       }
-      return; // Pause physics during goal flash
+      return;
     }
 
-    // AI
     this.updateAI(w, h);
 
     // Puck movement
@@ -2563,53 +3294,67 @@ export class FingerHockeyGame implements GameModule {
     this.puck.vx *= FH_FRICTION;
     this.puck.vy *= FH_FRICTION;
 
-    // Clamp speed
+    // Motion trail record
+    this.puckTrail.push({ x: this.puck.x, y: this.puck.y, isSuper: this.isSuperHit });
+    if (this.puckTrail.length > 8) this.puckTrail.shift();
+
     const speed = Math.sqrt(this.puck.vx ** 2 + this.puck.vy ** 2);
+    if (speed < 5) this.isSuperHit = false;
+
     if (speed > FH_MAX_SPEED) {
       this.puck.vx = (this.puck.vx / speed) * FH_MAX_SPEED;
       this.puck.vy = (this.puck.vy / speed) * FH_MAX_SPEED;
     }
 
-    // Wall bounces (left/right)
+    // Wall bounces
     if (this.puck.x - FH_PUCK_R < 0) {
       this.puck.x = FH_PUCK_R;
-      this.puck.vx = Math.abs(this.puck.vx) * 0.8;
+      this.puck.vx = Math.abs(this.puck.vx) * 0.85;
+      if (this.isSuperHit) this.particles.spawnConfetti(this.puck.x, this.puck.y, 8);
     }
     if (this.puck.x + FH_PUCK_R > w) {
       this.puck.x = w - FH_PUCK_R;
-      this.puck.vx = -Math.abs(this.puck.vx) * 0.8;
+      this.puck.vx = -Math.abs(this.puck.vx) * 0.85;
+      if (this.isSuperHit) this.particles.spawnConfetti(this.puck.x, this.puck.y, 8);
     }
 
-    // Goal detection
     const goalW = w * FH_GOAL_W_RATIO;
     const goalLeft = (w - goalW) / 2;
     const goalRight = goalLeft + goalW;
 
-    // Top goal (AI's goal — humans score here)
+    // Top goal (AI goal scored by Humans)
     if (this.puck.y - FH_PUCK_R < 0) {
       if (this.puck.x > goalLeft && this.puck.x < goalRight) {
         this.scoreHumans++;
-        this.goalFlashTimer = 60;
-        this.goalMessage = '⚽ ¡GOL de los humanos!';
+        this.goalFlashTimer = 65;
+        this.goalMessage = '⚽ ¡GOL DE LOS HUMANOS!';
+        this.netWobble = 25;
+        this.particles.spawnConfetti(w / 2, 20, 45);
+        sound.victory();
+        haptic([50, 60, 100]);
         this.puck.vx = 0; this.puck.vy = 0;
         return;
       } else {
         this.puck.y = FH_PUCK_R;
-        this.puck.vy = Math.abs(this.puck.vy) * 0.8;
+        this.puck.vy = Math.abs(this.puck.vy) * 0.85;
       }
     }
 
-    // Bottom goal (Humans' goal — AI scores here)
+    // Bottom goal (Human goal scored by AI)
     if (this.puck.y + FH_PUCK_R > h) {
       if (this.puck.x > goalLeft && this.puck.x < goalRight) {
         this.scoreAI++;
-        this.goalFlashTimer = 60;
-        this.goalMessage = '🤖 ¡GOL de la IA!';
+        this.goalFlashTimer = 65;
+        this.goalMessage = '🤖 ¡GOL DE LA IA!';
+        this.netWobble = 25;
+        this.particles.spawnConfetti(w / 2, h - 20, 25);
+        sound.defeat();
+        haptic([100, 50, 80]);
         this.puck.vx = 0; this.puck.vy = 0;
         return;
       } else {
         this.puck.y = h - FH_PUCK_R;
-        this.puck.vy = -Math.abs(this.puck.vy) * 0.8;
+        this.puck.vy = -Math.abs(this.puck.vy) * 0.85;
       }
     }
 
@@ -2623,7 +3368,6 @@ export class FingerHockeyGame implements GameModule {
     this.p2Prev = { ...this.p2Mallet };
   }
 
-  // ── Sync ──
   private broadcastState() {
     this.ctx.sync.setState({
       fhState: {
@@ -2636,6 +3380,8 @@ export class FingerHockeyGame implements GameModule {
         sA: this.scoreAI,
         gf: this.goalFlashTimer,
         gm: this.goalMessage,
+        isSuper: this.isSuperHit,
+        aiMood: this.aiMood,
         ts: Date.now()
       }
     });
@@ -2647,7 +3393,6 @@ export class FingerHockeyGame implements GameModule {
       this.handleRestart();
     }
 
-    // Host receives guest mallet position
     if (this.ctx.isHost && state.fhMallet && state.fhMallet.ts !== this.lastMalletTs) {
       this.lastMalletTs = state.fhMallet.ts;
       if (state.fhMallet.by !== this.ctx.me.id) {
@@ -2656,22 +3401,24 @@ export class FingerHockeyGame implements GameModule {
       }
     }
 
-    // Guest receives authoritative state
     if (!this.ctx.isHost && state.fhState) {
       const s = state.fhState;
       this.puck = { ...s.puck };
       this.ai1 = { ...s.ai1 };
       this.ai2 = { ...s.ai2 };
       this.p1Mallet = { ...s.p1 };
-      // Don't overwrite p2 if we're the guest (local prediction)
       this.scoreHumans = s.sH;
       this.scoreAI = s.sA;
       this.goalFlashTimer = s.gf;
       this.goalMessage = s.gm;
+      this.isSuperHit = s.isSuper;
+      this.aiMood = s.aiMood || '🤖';
+
+      this.puckTrail.push({ x: this.puck.x, y: this.puck.y, isSuper: this.isSuperHit });
+      if (this.puckTrail.length > 8) this.puckTrail.shift();
     }
   };
 
-  // ── Render ──
   private loop = () => {
     this.update();
     this.draw();
@@ -2683,12 +3430,17 @@ export class FingerHockeyGame implements GameModule {
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
 
-    c.clearRect(0, 0, w, h);
+    c.save();
+    if (this.shakeTimer > 0) {
+      this.shakeTimer--;
+      c.translate((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+    }
 
-    // ── Rink background ──
-    // Center line
+    c.clearRect(-10, -10, w + 20, h + 20);
+
+    // Center divider
     c.setLineDash([8, 8]);
-    c.strokeStyle = 'rgba(0,0,0,0.12)';
+    c.strokeStyle = 'rgba(0,0,0,0.14)';
     c.lineWidth = 2;
     c.beginPath();
     c.moveTo(0, h / 2);
@@ -2700,106 +3452,121 @@ export class FingerHockeyGame implements GameModule {
     c.strokeStyle = 'rgba(0,0,0,0.08)';
     c.lineWidth = 2;
     c.beginPath();
-    c.arc(w / 2, h / 2, Math.min(w, h) * 0.15, 0, Math.PI * 2);
+    c.arc(w / 2, h / 2, Math.min(w, h) * 0.16, 0, Math.PI * 2);
     c.stroke();
 
-    // Goals
+    // Goals with net wobble
     const goalW = w * FH_GOAL_W_RATIO;
     const goalLeft = (w - goalW) / 2;
+    const wobbleOffset = this.netWobble > 0 ? Math.sin(Date.now() * 0.05) * 4 : 0;
 
-    // Top goal (AI's — humans try to score here)
-    c.fillStyle = 'rgba(85, 239, 196, 0.2)';
+    // Top goal (AI goal)
+    c.fillStyle = 'rgba(85, 239, 196, 0.22)';
     c.strokeStyle = '#55efc4';
     c.lineWidth = 4;
-    c.fillRect(goalLeft, 0, goalW, 10);
-    c.beginPath();
-    c.moveTo(goalLeft, 10);
-    c.lineTo(goalLeft, 0);
-    c.lineTo(goalLeft + goalW, 0);
-    c.lineTo(goalLeft + goalW, 10);
-    c.stroke();
+    c.fillRect(goalLeft, 0, goalW, 12 + wobbleOffset);
+    c.strokeRect(goalLeft, 0, goalW, 12 + wobbleOffset);
 
-    // Bottom goal (Humans' — AI tries to score here)
-    c.fillStyle = 'rgba(255, 118, 117, 0.2)';
+    // Bottom goal (Human goal)
+    c.fillStyle = 'rgba(255, 118, 117, 0.22)';
     c.strokeStyle = '#ff7675';
     c.lineWidth = 4;
-    c.fillRect(goalLeft, h - 10, goalW, 10);
-    c.beginPath();
-    c.moveTo(goalLeft, h - 10);
-    c.lineTo(goalLeft, h);
-    c.lineTo(goalLeft + goalW, h);
-    c.lineTo(goalLeft + goalW, h - 10);
-    c.stroke();
+    c.fillRect(goalLeft, h - 12 - wobbleOffset, goalW, 12 + wobbleOffset);
+    c.strokeRect(goalLeft, h - 12 - wobbleOffset, goalW, 12 + wobbleOffset);
 
-    // Rink border
+    // Outer border
     c.strokeStyle = '#2d3436';
     c.lineWidth = 4;
     c.strokeRect(2, 2, w - 4, h - 4);
 
-    // ── AI Mallets (top) ──
-    this.drawMallet(c, this.ai1.x, this.ai1.y, '#ff7675', '🤖');
-    this.drawMallet(c, this.ai2.x, this.ai2.y, '#ff7675', '🤖');
+    // AI Mallets
+    this.drawMallet(c, this.ai1.x, this.ai1.y, '#ff7675', this.aiMood);
+    this.drawMallet(c, this.ai2.x, this.ai2.y, '#ff7675', this.aiMood);
 
-    // ── Human Mallets (bottom) ──
-    this.drawMallet(c, this.p1Mallet.x, this.p1Mallet.y, '#74b9ff', 'P1');
-    this.drawMallet(c, this.p2Mallet.x, this.p2Mallet.y, '#a29bfe', 'P2');
+    // Human Mallets
+    this.drawMallet(c, this.p1Mallet.x, this.p1Mallet.y, '#74b9ff', 'P1 🔵');
+    this.drawMallet(c, this.p2Mallet.x, this.p2Mallet.y, '#a29bfe', 'P2 🟣');
 
-    // ── Puck ──
+    // Puck Motion Trail
+    for (let i = 0; i < this.puckTrail.length; i++) {
+      const pt = this.puckTrail[i];
+      const alpha = (i + 1) / this.puckTrail.length * 0.45;
+      c.save();
+      c.globalAlpha = alpha;
+      c.beginPath();
+      c.arc(pt.x, pt.y, FH_PUCK_R * (0.5 + 0.5 * (i / this.puckTrail.length)), 0, Math.PI * 2);
+      c.fillStyle = pt.isSuper ? '#e17055' : 'rgba(45, 52, 54, 0.3)';
+      c.fill();
+      c.restore();
+    }
+
+    // Puck Body
+    c.save();
     c.beginPath();
     c.arc(this.puck.x, this.puck.y, FH_PUCK_R, 0, Math.PI * 2);
-    c.fillStyle = '#2d3436';
+    c.fillStyle = this.isSuperHit ? '#d63031' : '#2d3436';
     c.fill();
-    c.strokeStyle = '#636e72';
-    c.lineWidth = 2;
+    c.strokeStyle = this.isSuperHit ? '#f1c40f' : '#636e72';
+    c.lineWidth = this.isSuperHit ? 3.5 : 2;
     c.stroke();
+
     // Puck highlight
     c.beginPath();
     c.arc(this.puck.x - 4, this.puck.y - 4, 4, 0, Math.PI * 2);
-    c.fillStyle = 'rgba(255,255,255,0.5)';
+    c.fillStyle = 'rgba(255,255,255,0.6)';
     c.fill();
 
-    // ── Scoreboard ──
+    if (this.isSuperHit) {
+      c.font = '14px serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('🔥', this.puck.x, this.puck.y);
+    }
+    c.restore();
+
+    // Particle explosions
+    this.particles.updateAndDraw(c);
+
+    // Scoreboard
     c.font = `bold 22px 'Patrick Hand', cursive`;
     c.textAlign = 'left';
     c.fillStyle = '#2d3436';
-    c.fillText(`👫 ${this.scoreHumans}`, 14, h / 2 - 8);
+    c.fillText(`👫 Humanos: ${this.scoreHumans}`, 14, h / 2 - 10);
     c.textAlign = 'right';
-    c.fillText(`🤖 ${this.scoreAI}`, w - 14, h / 2 + 22);
+    c.fillText(`🤖 IA: ${this.scoreAI}`, w - 14, h / 2 + 24);
 
-    // ── Goal flash ──
+    // Goal Flash Announcement
     if (this.goalFlashTimer > 0) {
       const alpha = Math.min(1, this.goalFlashTimer / 30);
-      c.fillStyle = `rgba(253,251,247,${alpha * 0.7})`;
+      c.fillStyle = `rgba(253,251,247,${alpha * 0.75})`;
       c.fillRect(0, 0, w, h);
 
-      c.font = `bold ${w * 0.07}px 'Patrick Hand', cursive`;
+      c.font = `bold ${w * 0.075}px 'Patrick Hand', cursive`;
       c.textAlign = 'center';
       c.textBaseline = 'middle';
       c.fillStyle = '#2d3436';
       c.fillText(this.goalMessage, w / 2, h / 2);
     }
 
-    // ── Game Over ──
+    // Match End Screen
     if (this.scoreHumans >= this.maxScore || this.scoreAI >= this.maxScore) {
-      c.fillStyle = 'rgba(253,251,247,0.85)';
+      c.fillStyle = 'rgba(253,251,247,0.88)';
       c.fillRect(0, 0, w, h);
 
       const humansWon = this.scoreHumans >= this.maxScore;
       c.fillStyle = '#2d3436';
-      c.font = `bold ${w * 0.12}px 'Patrick Hand', cursive`;
+      c.font = `bold ${w * 0.13}px 'Patrick Hand', cursive`;
       c.textAlign = 'center';
       c.textBaseline = 'middle';
       c.fillText(humansWon ? '🎉' : '🤖', w / 2, h * 0.35);
 
-      c.font = `bold ${w * 0.06}px 'Patrick Hand', cursive`;
-      c.fillText(
-        humansWon ? '¡Los humanos ganan!' : '¡La IA gana!',
-        w / 2, h * 0.48
-      );
+      c.font = `bold ${w * 0.07}px 'Patrick Hand', cursive`;
+      c.fillText(humansWon ? '¡Los humanos ganan!' : '¡La IA se llevó el partido!', w / 2, h * 0.48);
 
-      c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
+      c.font = `${w * 0.045}px 'Patrick Hand', cursive`;
       c.fillStyle = '#636e72';
-      c.fillText(`${this.scoreHumans} - ${this.scoreAI}`, w / 2, h * 0.56);
+      c.fillText(`Marcador Final: ${this.scoreHumans} - ${this.scoreAI}`, w / 2, h * 0.58);
+      c.fillText('Toca para revancha', w / 2, h * 0.66);
 
       if (!this.matchEnded) {
         this.matchEnded = true;
@@ -2822,6 +3589,8 @@ export class FingerHockeyGame implements GameModule {
         });
       }
     }
+
+    c.restore();
   }
 
   private handleRestart() {
@@ -2829,6 +3598,8 @@ export class FingerHockeyGame implements GameModule {
     this.scoreAI = 0;
     this.matchEnded = false;
     this.goalFlashTimer = 0;
+    this.isSuperHit = false;
+    this.puckTrail = [];
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
     this.resetPuck(w, h);
@@ -2840,7 +3611,6 @@ export class FingerHockeyGame implements GameModule {
   }
 
   private drawMallet(c: CanvasRenderingContext2D, x: number, y: number, color: string, label: string) {
-    // Outer ring
     c.beginPath();
     c.arc(x, y, FH_MALLET_R, 0, Math.PI * 2);
     c.fillStyle = color;
@@ -2849,7 +3619,6 @@ export class FingerHockeyGame implements GameModule {
     c.lineWidth = 3;
     c.stroke();
 
-    // Inner ring
     c.beginPath();
     c.arc(x, y, FH_MALLET_R * 0.55, 0, Math.PI * 2);
     c.fillStyle = 'white';
@@ -2858,7 +3627,6 @@ export class FingerHockeyGame implements GameModule {
     c.lineWidth = 2;
     c.stroke();
 
-    // Label
     c.font = `bold 13px 'Patrick Hand', cursive`;
     c.textAlign = 'center';
     c.textBaseline = 'middle';
