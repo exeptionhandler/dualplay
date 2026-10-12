@@ -98,19 +98,34 @@ const channels = new Map(); // channelId -> Set of WebSockets
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   const channelId = url.searchParams.get('channelId') || 'global';
+  ws.channelId = channelId;
+  ws.userId = null;
 
   if (!channels.has(channelId)) {
     channels.set(channelId, new Set());
   }
   channels.get(channelId).add(ws);
 
-  ws.on('message', (data) => {
+  ws.on('message', (raw) => {
+    try {
+      const data = JSON.parse(raw);
+      if (data.from && !ws.userId) {
+        ws.userId = data.from;
+      }
+      if (data.type === 'ping') {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pong', ts: data.ts, serverTs: Date.now() }));
+        }
+        return;
+      }
+    } catch (_) {}
+
     // Relay to all OTHER clients in the same channel
     const clients = channels.get(channelId);
     if (clients) {
       clients.forEach(client => {
         if (client !== ws && client.readyState === WebSocket.OPEN) {
-          client.send(data);
+          client.send(raw);
         }
       });
     }
@@ -120,6 +135,18 @@ wss.on('connection', (ws, req) => {
     const clients = channels.get(channelId);
     if (clients) {
       clients.delete(ws);
+      if (ws.userId) {
+        const disconnectMsg = JSON.stringify({
+          type: 'peer_disconnect',
+          userId: ws.userId,
+          gracePeriodMs: 15000,
+        });
+        clients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(disconnectMsg);
+          }
+        });
+      }
       if (clients.size === 0) channels.delete(channelId);
     }
   });

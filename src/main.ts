@@ -1,117 +1,203 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { Sync } from './sync';
-import { renderLobby, renderGameView, showToast, setWaitingOverlay } from './ui';
+import { renderLobby, renderGameView, showToast, setWaitingOverlay, triggerFloatingReaction } from './ui';
 import type { GameId } from './types';
 import { GAME_MODULES } from './games';
 import type { GameModule } from './games';
 import { GAMES } from './ui';
+import { profileManager } from './badges';
+import { DuoBot, DUOBOT_USER } from './bot';
+import { sound, haptic } from './audio';
 import './style.css';
 
 // ── App State ──────────────────────────────────────────
-const discordSdk = new DiscordSDK(import.meta.env.VITE_DISCORD_CLIENT_ID || '123456789012345678');
 const sync = new Sync();
+const duoBot = new DuoBot(sync);
 
 let currentGame: GameModule | null = null;
 let me: any = null;
 let participants: any[] = [];
-let currentScreen: string = ''; // Track which screen we're on to prevent re-entry
+let currentScreen: string = 'lobby';
 let gamePendingInit: { mod: GameModule, canvas: HTMLCanvasElement, isHost: boolean } | null = null;
+let currentRoomId = 'global';
+let reactionCounter = 0;
 
-// ── Navigation state change handler (defined once) ──
+// Deterministic Host Arbitrage (Prevents Split-Brain)
+function getIsHost(): boolean {
+  if (participants.length === 0) return true;
+  // Sort deterministically by id
+  const sorted = [...participants].sort((a, b) => a.id.localeCompare(b.id));
+  return sorted[0]?.id === me.id;
+}
+
+// ── Navigation state change handler ───────────────────
 function handleNavigationChange(state: any) {
-  // Instead of forcing navigation, we just update the lobby if we are in it
   if (currentScreen === 'lobby') {
     renderLobby(participants, {
       onGameSelect: handleGameSelect,
-      hostLocation: state.host_location
+      hostLocation: state.host_location,
+      onInvite: handleInvite,
+      onPlayBot: handlePlayWithBot,
+      onProfileUpdate: handleProfileUpdate,
     });
   }
 }
 
-// ── Boot ───────────────────────────────────────────────
+// ── Bootstrapping ──────────────────────────────────────
 async function init() {
   const app = document.getElementById('app')!;
-  app.innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;font-size:2rem;color:var(--ink-secondary);">Conectando con Discord...</div>';
+  app.innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;font-size:2rem;color:var(--ink-secondary);">Cargando DuoPlay...</div>';
 
-  try {
-    // 1. Wait for Discord SDK to be ready (with timeout)
-    await Promise.race([
-      discordSdk.ready(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Discord SDK timeout')), 5000))
-    ]);
+  const urlParams = new URLSearchParams(window.location.search);
+  const isDiscordEnv = urlParams.has('frame_id') || navigator.userAgent.includes('Discord');
 
-    app.innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;font-size:2rem;color:var(--ink-secondary);">Autorizando...</div>';
-
-    // 2. Authorize
-    const { code } = await discordSdk.commands.authorize({
-      client_id: discordSdk.clientId,
-      response_type: 'code',
-      state: '',
-      prompt: 'none',
-      scope: ['identify', 'rpc.voice.read'],
-    });
-
-    // 3. Authenticate
-    const authResult = await fetch('/api/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    }).then(res => res.json()).catch(() => ({ access_token: 'mock_token' }));
-
-    await discordSdk.commands.authenticate({
-      access_token: authResult.access_token,
-    });
-
-    // 4. Get current user & initialize Sync
-    me = await fetch(`https://discord.com/api/users/@me`, {
-      headers: { Authorization: `Bearer ${authResult.access_token}` }
-    }).then(res => res.json()).catch(() => ({ id: '1', username: 'HostUser', avatar: null }));
-    participants = [me];
-
-    await sync.init({
-      channelId: discordSdk.channelId,
-      userId: me.id,
-    });
-  } catch (e: any) {
-    console.error('Init Error:', e);
-    me = { id: 'local_user', username: 'DevUser', avatar: null };
-    participants = [me];
-    await sync.init({ channelId: 'local', userId: me.id });
+  // Room identification
+  currentRoomId = urlParams.get('room') || (isDiscordEnv ? 'discord_main' : `SALA-${Math.floor(100 + Math.random() * 900)}`);
+  if (!urlParams.has('room') && !isDiscordEnv) {
+    urlParams.set('room', currentRoomId);
+    window.history.replaceState({}, '', `${window.location.pathname}?${urlParams.toString()}`);
   }
 
+  // Load user profile
+  const profile = profileManager.getProfile();
+
+  if (isDiscordEnv) {
+    try {
+      const discordSdk = new DiscordSDK(import.meta.env.VITE_DISCORD_CLIENT_ID || '123456789012345678');
+      await Promise.race([
+        discordSdk.ready(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Discord timeout')), 4000))
+      ]);
+
+      const { code } = await discordSdk.commands.authorize({
+        client_id: discordSdk.clientId,
+        response_type: 'code',
+        state: '',
+        prompt: 'none',
+        scope: ['identify', 'rpc.voice.read'],
+      });
+
+      const authResult = await fetch('/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      }).then(res => res.json()).catch(() => ({ access_token: 'mock_token' }));
+
+      await discordSdk.commands.authenticate({ access_token: authResult.access_token });
+
+      const discordUser = await fetch(`https://discord.com/api/users/@me`, {
+        headers: { Authorization: `Bearer ${authResult.access_token}` }
+      }).then(res => res.json()).catch(() => null);
+
+      me = {
+        id: discordUser?.id || `u_${Math.random().toString(36).slice(2, 7)}`,
+        username: profile.customName || discordUser?.username || 'Gamer Discord',
+        avatar: discordUser?.avatar || null,
+        avatarIcon: profile.avatarIcon,
+        accessory: profile.accessory,
+        equippedBadges: profile.equippedBadgeIds,
+      };
+
+      currentRoomId = discordSdk.channelId || currentRoomId;
+    } catch (e) {
+      console.warn('Fallback a modo Web Standalone desde Discord:', e);
+      setupStandaloneUser(profile);
+    }
+  } else {
+    setupStandaloneUser(profile);
+  }
+
+  participants = [me];
+
+  // Initialize WebSocket Relay
+  try {
+    await sync.init({
+      channelId: currentRoomId,
+      userId: me.id,
+    });
+  } catch (err) {
+    console.error('Error conectando a relay:', err);
+  }
+
+  setupSyncListeners();
+  sync.sendPresence(me);
+  goLobby();
+}
+
+function setupStandaloneUser(profile: ReturnType<typeof profileManager.getProfile>) {
+  // Tab-isolated unique ID for local testing and web play
+  let tabUid = sessionStorage.getItem('duoplay_tab_uid');
+  if (!tabUid) {
+    tabUid = `web_${Math.random().toString(36).slice(2, 8)}`;
+    sessionStorage.setItem('duoplay_tab_uid', tabUid);
+  }
+
+  me = {
+    id: tabUid,
+    username: profile.customName || `Jugador_${tabUid.slice(-3)}`,
+    avatar: null,
+    avatarIcon: profile.avatarIcon,
+    accessory: profile.accessory,
+    equippedBadges: profile.equippedBadgeIds,
+  };
+}
+
+function setupSyncListeners() {
   sync.on('stateChange', handleNavigationChange);
-  
-  // Presence tracking: see other players
+
+  // Presence: new user joined
   sync.on('presence', (user: any) => {
-    if (!participants.find(p => p.id === user.id)) {
+    if (!user || user.id === me.id) return;
+
+    const existingIdx = participants.findIndex(p => p.id === user.id);
+    if (existingIdx >= 0) {
+      participants[existingIdx] = user; // Update profile/badges
+    } else {
       participants.push(user);
-      
+      showToast(`👋 ${user.username} se unió a la sala`);
+      sound.victory();
+      haptic(30);
+
+      // Reply with our presence so they know we are here
+      sync.sendPresence(me);
+
       if (currentScreen === 'lobby') {
         goLobby();
       } else if (participants.length >= 2) {
         setWaitingOverlay(false);
-        // Start the game logic now that player 2 is here
         if (gamePendingInit) {
           gamePendingInit.mod.init({
             canvas: gamePendingInit.canvas,
             sync,
             me,
-            isHost: gamePendingInit.isHost
+            isHost: getIsHost(),
           });
           gamePendingInit = null;
         }
       }
-      // Send our presence back so they see us too
-      sync.sendPresence(me);
-      // Let them know where we are
-      if (currentScreen !== 'lobby') {
-        sync.setState({ host_location: currentScreen });
+    }
+  });
+
+  // Peer disconnected
+  sync.on('peerDisconnect', (data: any) => {
+    const idx = participants.findIndex(p => p.id === data.userId);
+    if (idx >= 0) {
+      const leftUser = participants[idx];
+      participants.splice(idx, 1);
+      showToast(`⚠️ ${leftUser.username} se ha desconectado`);
+
+      if (currentScreen !== 'lobby' && participants.length < 2) {
+        setWaitingOverlay(true);
+      } else if (currentScreen === 'lobby') {
+        goLobby();
       }
     }
   });
-  sync.sendPresence(me);
 
-  goLobby();
+  // Social reaction received
+  sync.on('reaction', (data: any) => {
+    triggerFloatingReaction(data.emoji, data.xRatio);
+  });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -120,6 +206,8 @@ async function init() {
 
 function goLobby(): void {
   currentScreen = 'lobby';
+  duoBot.stop();
+
   if (!gamePendingInit) {
     currentGame?.destroy();
   }
@@ -129,7 +217,10 @@ function goLobby(): void {
 
   renderLobby(participants, {
     onGameSelect: handleGameSelect,
-    hostLocation: sync.getState().host_location
+    hostLocation: sync.getState().host_location,
+    onInvite: handleInvite,
+    onPlayBot: handlePlayWithBot,
+    onProfileUpdate: handleProfileUpdate,
   });
 }
 
@@ -144,15 +235,15 @@ function goGame(gameId: GameId): void {
   currentGame = null;
 
   const canvas = renderGameView(entry, {
-    onBack: () => {
-      goLobby();
-    },
+    onBack: () => goLobby(),
+    onPlayBot: () => handlePlayWithBot(),
+    onReaction: (emoji) => handleSendReaction(emoji),
   });
 
   const mod = GAME_MODULES[gameId]?.();
   if (mod) {
     currentGame = mod;
-    const isHost = participants.length > 0 && participants[0].id === me.id;
+    const isHost = getIsHost();
 
     if (participants.length < 2) {
       setWaitingOverlay(true);
@@ -161,12 +252,12 @@ function goGame(gameId: GameId): void {
       setWaitingOverlay(false);
       mod.init({ canvas, sync, me, isHost });
     }
-    showToast(`${entry.emoji} ${entry.name} cargado`);
+    showToast(`${entry.emoji} ${entry.name}`);
   }
 }
 
 // ═══════════════════════════════════════════════════════
-//  ACTION HANDLERS
+//  ACTIONS & HANDLERS
 // ═══════════════════════════════════════════════════════
 
 function handleGameSelect(gameId: GameId): void {
@@ -174,6 +265,69 @@ function handleGameSelect(gameId: GameId): void {
   goGame(gameId);
 }
 
+function handleInvite(): void {
+  const shareUrl = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(currentRoomId)}`;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      showToast('📋 ¡Enlace copiado! Pégaselo a tu compañero.');
+    }).catch(() => {
+      prompt('Copia este enlace de sala:', shareUrl);
+    });
+  } else {
+    prompt('Copia este enlace de sala:', shareUrl);
+  }
+}
+
+function handlePlayWithBot(): void {
+  if (!participants.find(p => p.id === DUOBOT_USER.id)) {
+    participants.push(DUOBOT_USER);
+  }
+  profileManager.unlockBadge('bot-whisperer');
+  showToast('🤖 DuoBot se ha unido como compañero.');
+
+  setWaitingOverlay(false);
+  duoBot.start(currentScreen);
+
+  if (gamePendingInit) {
+    gamePendingInit.mod.init({
+      canvas: gamePendingInit.canvas,
+      sync,
+      me,
+      isHost: true,
+    });
+    gamePendingInit = null;
+  } else if (currentScreen === 'lobby') {
+    goLobby();
+  }
+}
+
+function handleProfileUpdate(): void {
+  const profile = profileManager.getProfile();
+  me.username = profile.customName || me.username;
+  me.avatarIcon = profile.avatarIcon;
+  me.accessory = profile.accessory;
+  me.equippedBadges = profile.equippedBadgeIds;
+  sync.sendPresence(me);
+}
+
+function handleSendReaction(emoji: string): void {
+  reactionCounter++;
+  if (reactionCounter >= 5) {
+    profileManager.unlockBadge('party-soul');
+  }
+  const xRatio = 0.2 + Math.random() * 0.6;
+  sync.sendReaction(emoji, me.username, xRatio);
+}
+
+// Keyboard shortcuts for reactions (1-6)
+window.addEventListener('keydown', (e) => {
+  const keyMap: Record<string, string> = {
+    '1': '👏', '2': '😂', '3': '🔥', '4': '😱', '5': '❤️', '6': '👑'
+  };
+  if (keyMap[e.key] && currentScreen !== 'lobby') {
+    handleSendReaction(keyMap[e.key]);
+  }
+});
+
 // Boot app
 init();
-

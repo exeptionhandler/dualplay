@@ -10,6 +10,10 @@
  */
 
 import type { Sync } from './sync';
+import { sound, haptic, ParticleSystem } from './audio';
+import { profileManager } from './badges';
+import { showRematchModal, showToast } from './ui';
+
 
 export interface GameContext {
   canvas: HTMLCanvasElement;
@@ -199,6 +203,7 @@ export class TetrisDual implements GameModule {
       }
     }
     p.active = false;
+    sound.thud(100);
   }
 
   private clearLines() {
@@ -210,6 +215,11 @@ export class TetrisDual implements GameModule {
         r++; // check same row again
         linesCleared++;
       }
+    }
+    if (linesCleared > 0) {
+      sound.lineClear();
+      haptic([30, 40, 60]);
+      profileManager.unlockBadge('tetris-master');
     }
   }
 
@@ -485,39 +495,67 @@ export class BalloonGame implements GameModule {
   private ctx!: GameContext;
   private animId = 0;
   private canvasCtx!: CanvasRenderingContext2D;
-  
-  // Physics state
-  private balloon = { x: 0, y: 0, vy: 0, radius: 40 };
-  private gravity = 0.4;
-  private jumpForce = -9;
+  private particles = new ParticleSystem();
+
+  // Physics & Animation state
+  private balloon = { x: 0, y: 0, vx: 0, vy: 0, radius: 42 };
+  private gravity = 0.32;
+  private jumpForce = -9.5;
   private syncInterval: any = null;
   private lastPulseTs = 0;
+  private squash = 1;
+  private score = 0;
+  private startTime = 0;
+  private gameOver = false;
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
     this.canvasCtx = ctx.canvas.getContext('2d')!;
-    
-    this.balloon.x = ctx.canvas.width / 2;
-    this.balloon.y = ctx.canvas.height / 2;
-    
+    this.restart();
+
     ctx.canvas.addEventListener('pointerdown', this.onTap);
-    
+
     if (ctx.isHost) {
       this.syncInterval = setInterval(() => {
         ctx.sync.setState({
-          balloonState: { y: this.balloon.y, vy: this.balloon.vy, ts: Date.now() }
+          balloonState: {
+            x: this.balloon.x,
+            y: this.balloon.y,
+            vy: this.balloon.vy,
+            score: this.score,
+            over: this.gameOver,
+            ts: Date.now()
+          }
         });
-      }, 100);
+      }, 80);
     }
 
     ctx.sync.on('stateChange', this.onStateChange);
     this.loop();
   }
 
+  private restart() {
+    this.balloon.x = this.ctx.canvas.width / 2;
+    this.balloon.y = this.ctx.canvas.height * 0.4;
+    this.balloon.vx = 0;
+    this.balloon.vy = 0;
+    this.score = 0;
+    this.squash = 1;
+    this.gameOver = false;
+    this.startTime = Date.now();
+  }
+
   private onTap = () => {
+    if (this.gameOver) return;
+
     this.balloon.vy = this.jumpForce;
+    this.balloon.vx += (Math.random() - 0.5) * 2;
+    this.squash = 0.72;
+    this.score++;
+    sound.boing(320);
+    haptic(20);
+
     if (!this.ctx.isHost) {
-      // Guest sends pulse to host
       this.ctx.sync.setState({ pulse: { ts: Date.now(), by: this.ctx.me.id } });
     }
   };
@@ -526,13 +564,53 @@ export class BalloonGame implements GameModule {
     if (this.ctx.isHost && state.pulse && state.pulse.ts !== this.lastPulseTs) {
       this.lastPulseTs = state.pulse.ts;
       this.balloon.vy = this.jumpForce;
+      this.balloon.vx += (Math.random() - 0.5) * 2;
+      this.squash = 0.72;
+      this.score++;
+      sound.boing(360);
+      haptic(20);
     } else if (!this.ctx.isHost && state.balloonState) {
-      // Simple client-side reconciliation / hard snap for now
+      this.balloon.x = state.balloonState.x;
       this.balloon.y = state.balloonState.y;
-      // We don't snap vy, we let local physics run to keep it smooth, 
-      // but syncing y is enough to keep them close.
+      this.score = state.balloonState.score;
+      if (state.balloonState.over && !this.gameOver) {
+        this.triggerGameOver();
+      }
     }
   };
+
+  private triggerGameOver() {
+    this.gameOver = true;
+    sound.explosion();
+    haptic([80, 80, 140]);
+    this.particles.spawnConfetti(this.balloon.x, this.balloon.y, 45);
+
+    const seconds = Math.floor((Date.now() - this.startTime) / 1000);
+    const won = seconds >= 30;
+
+    if (won) {
+      profileManager.unlockBadge('balloon-ace');
+      profileManager.addWin();
+      sound.victory();
+    } else {
+      profileManager.resetStreak();
+    }
+
+    showRematchModal({
+      won,
+      title: won ? '¡Acróbatas del Globo!' : '¡El globo cayó al suelo! 💥',
+      statsText: `Toques en equipo: ${this.score} · Tiempo: ${seconds}s`,
+      onRematch: () => {
+        this.restart();
+        if (this.ctx.isHost) {
+          this.ctx.sync.setState({ balloonState: { over: false, score: 0, ts: Date.now() } });
+        }
+      },
+      onLobby: () => {
+        this.ctx.sync.setState({ host_location: null });
+      }
+    });
+  }
 
   private loop = () => {
     this.update();
@@ -541,17 +619,43 @@ export class BalloonGame implements GameModule {
   };
 
   private update() {
+    if (this.gameOver) return;
+
     this.balloon.vy += this.gravity;
     this.balloon.y += this.balloon.vy;
-    
+    this.balloon.x += this.balloon.vx;
+    this.balloon.vx *= 0.98; // Lateral friction
+
+    // Recovery from squash
+    this.squash += (1 - this.squash) * 0.15;
+
+    const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
-    if (this.balloon.y + this.balloon.radius > h) {
-      this.balloon.y = h - this.balloon.radius;
-      this.balloon.vy = -this.balloon.vy * 0.4;
+
+    // Walls bounce
+    if (this.balloon.x - this.balloon.radius < 10) {
+      this.balloon.x = this.balloon.radius + 10;
+      this.balloon.vx = -this.balloon.vx * 0.7;
     }
-    if (this.balloon.y - this.balloon.radius < 0) {
-      this.balloon.y = this.balloon.radius;
-      this.balloon.vy = 0;
+    if (this.balloon.x + this.balloon.radius > w - 10) {
+      this.balloon.x = w - this.balloon.radius - 10;
+      this.balloon.vx = -this.balloon.vx * 0.7;
+    }
+
+    // Ceiling constraint
+    if (this.balloon.y - this.balloon.radius < 20) {
+      this.balloon.y = this.balloon.radius + 20;
+      this.balloon.vy = 2;
+    }
+
+    // Floor = Game Over!
+    if (this.balloon.y + this.balloon.radius >= h - 25) {
+      this.triggerGameOver();
+      if (this.ctx.isHost) {
+        this.ctx.sync.setState({
+          balloonState: { over: true, y: this.balloon.y, score: this.score, ts: Date.now() }
+        });
+      }
     }
   }
 
@@ -559,37 +663,64 @@ export class BalloonGame implements GameModule {
     const c = this.canvasCtx;
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
-    
+
     c.clearRect(0, 0, w, h);
-    
-    c.save();
-    c.translate(this.balloon.x, this.balloon.y);
-    
-    // Doodle String
+
+    // Floor hazard spikes / grass
+    c.strokeStyle = '#2d3436';
+    c.fillStyle = '#ff7675';
+    c.lineWidth = 3;
     c.beginPath();
-    c.moveTo(0, this.balloon.radius);
-    c.quadraticCurveTo(15, this.balloon.radius + 30, -5, this.balloon.radius + 70);
-    c.strokeStyle = 'var(--ink-primary, #2d3436)';
-    c.lineWidth = 4;
-    c.lineCap = 'round';
-    c.stroke();
-    
-    // Doodle Balloon
-    c.beginPath();
-    c.arc(0, 0, this.balloon.radius, 0, Math.PI * 2);
-    c.fillStyle = 'var(--accent-red, #ff7675)';
+    c.moveTo(0, h);
+    for (let x = 0; x < w; x += 25) {
+      c.lineTo(x + 12, h - 20);
+      c.lineTo(x + 25, h);
+    }
     c.fill();
-    c.lineWidth = 5;
-    c.strokeStyle = 'var(--ink-primary, #2d3436)';
     c.stroke();
-    
-    // Reflection
-    c.beginPath();
-    c.arc(-12, -12, 6, 0, Math.PI * 2);
-    c.fillStyle = 'rgba(255,255,255,0.8)';
-    c.fill();
-    
-    c.restore();
+
+    // Stats HUD
+    const elapsed = this.gameOver ? 0 : Math.floor((Date.now() - this.startTime) / 1000);
+    c.fillStyle = '#2d3436';
+    c.font = 'bold 24px "Patrick Hand", cursive';
+    c.textAlign = 'left';
+    c.fillText(`🎈 Toques: ${this.score}`, 20, 40);
+    c.textAlign = 'right';
+    c.fillText(`⏱️ ${elapsed}s / 30s meta`, w - 20, 40);
+
+    if (!this.gameOver) {
+      c.save();
+      c.translate(this.balloon.x, this.balloon.y);
+      c.scale(1 / this.squash, this.squash);
+
+      // Doodle String
+      c.beginPath();
+      c.moveTo(0, this.balloon.radius);
+      c.quadraticCurveTo(12, this.balloon.radius + 25, -6, this.balloon.radius + 55);
+      c.strokeStyle = '#2d3436';
+      c.lineWidth = 3.5;
+      c.lineCap = 'round';
+      c.stroke();
+
+      // Doodle Balloon
+      c.beginPath();
+      c.arc(0, 0, this.balloon.radius, 0, Math.PI * 2);
+      c.fillStyle = '#ff7675';
+      c.fill();
+      c.lineWidth = 4;
+      c.strokeStyle = '#2d3436';
+      c.stroke();
+
+      // Reflection
+      c.beginPath();
+      c.arc(-12, -12, 7, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(255,255,255,0.75)';
+      c.fill();
+
+      c.restore();
+    }
+
+    this.particles.updateAndDraw(c);
   }
 
   destroy(): void {
@@ -719,12 +850,26 @@ export class MinesweeperGame implements GameModule {
       // BOOM — reveal all mines
       this.gameOver = true;
       this.won = false;
+      sound.explosion();
+      haptic([100, 100, 150]);
+      profileManager.resetStreak();
+
       for (let rr = 0; rr < MS_ROWS; rr++) {
         for (let cc = 0; cc < MS_COLS; cc++) {
           if (this.board[rr][cc].value === -1) this.board[rr][cc].display = 'revealed';
         }
       }
+
+      showRematchModal({
+        won: false,
+        title: '¡BOOM! Mina activada 💥',
+        statsText: '¡Trabajen en equipo para la próxima!',
+        onRematch: () => this.handleRestart(),
+        onLobby: () => this.ctx.sync.setState({ host_location: null })
+      });
       return;
+    } else {
+      sound.click();
     }
 
     if (cell.value === 0) {
@@ -755,14 +900,19 @@ export class MinesweeperGame implements GameModule {
     cell.display = cell.display === 'flagged' ? 'hidden' : 'flagged';
   }
 
+  private handleRestart() {
+    this.restart();
+    if (this.ctx.isHost) {
+      this.broadcastBoard();
+    } else {
+      this.ctx.sync.setState({ msRestart: { ts: Date.now() } });
+    }
+  }
+
   // ── Pointer handler ──
   private onPointerDown = (e: PointerEvent) => {
     if (this.gameOver || this.won) {
-      // Tap to restart
-      if (this.ctx.isHost) {
-        this.restart();
-        this.broadcastBoard();
-      }
+      this.handleRestart();
       return;
     }
 
@@ -825,6 +975,19 @@ export class MinesweeperGame implements GameModule {
     }
     if (!this.gameOver) {
       this.won = this.checkWin();
+      if (this.won) {
+        sound.victory();
+        haptic([40, 50, 100]);
+        profileManager.unlockBadge('minesweeper-pro');
+        profileManager.addWin();
+        showRematchModal({
+          won: true,
+          title: '¡Tablero Despejado! 🎉',
+          statsText: '¡Desactivaron todas las minas en pareja!',
+          onRematch: () => this.handleRestart(),
+          onLobby: () => this.ctx.sync.setState({ host_location: null })
+        });
+      }
     }
   }
 
@@ -860,6 +1023,12 @@ export class MinesweeperGame implements GameModule {
   }
 
   private onStateChange = (state: any) => {
+    if (state.msRestart && state.msRestart.ts !== this.lastActionTs) {
+      this.lastActionTs = state.msRestart.ts;
+      this.restart();
+      if (this.ctx.isHost) this.broadcastBoard();
+    }
+
     // Host processes actions from guest
     if (this.ctx.isHost && state.msAction && state.msAction.ts !== this.lastActionTs) {
       this.lastActionTs = state.msAction.ts;
@@ -1148,13 +1317,23 @@ export class CrystalBridgeGame implements GameModule {
   }
 
   // ── Pointer: Guest picks a tile ──
+  private handleRestart(swapRoles = false) {
+    if (swapRoles) {
+      this.ctx.isHost = !this.ctx.isHost;
+      showToast(this.ctx.isHost ? '👁️ Ahora eres el Guía' : '🚶 Ahora eres el Caminante');
+    }
+    this.restart();
+    if (this.ctx.isHost) {
+      this.broadcastState();
+    } else {
+      this.ctx.sync.setState({ cbRestart: { ts: Date.now(), swapRoles } });
+    }
+  }
+
+  // ── Pointer: Guest picks a tile ──
   private onPointerDown = (e: PointerEvent) => {
     if (this.gameOver || this.won) {
-      // Tap to restart
-      if (this.ctx.isHost) {
-        this.restart();
-        this.broadcastState();
-      }
+      this.handleRestart();
       return;
     }
 
@@ -1183,6 +1362,19 @@ export class CrystalBridgeGame implements GameModule {
       // Reached the end!
       this.avatarRow = CB_ROWS;
       this.won = true;
+      sound.victory();
+      haptic([50, 50, 100]);
+      profileManager.unlockBadge('glass-walker');
+      profileManager.addWin();
+
+      showRematchModal({
+        won: true,
+        title: '¡Cruzaron el Puente! 🎉',
+        statsText: '¡Memoria y trabajo en equipo impecables!',
+        canSwapRoles: true,
+        onRematch: (swap) => this.handleRestart(swap),
+        onLobby: () => this.ctx.sync.setState({ host_location: null })
+      });
       return;
     }
 
@@ -1196,16 +1388,34 @@ export class CrystalBridgeGame implements GameModule {
     if (!safe) {
       this.lives--;
       this.shakeTimer = 20; // frames of screen shake
+      sound.explosion();
+      haptic([100, 100, 150]);
+
       if (this.lives <= 0) {
         this.gameOver = true;
+        profileManager.resetStreak();
+        sound.defeat();
+
         // Reveal all tiles
         for (let i = 0; i < CB_ROWS; i++) {
           this.revealed[i] = [true, true];
         }
+
+        showRematchModal({
+          won: false,
+          title: '¡Se rompió el cristal! 💔',
+          statsText: `Llegaron a la fila ${this.avatarRow + 1} de ${CB_ROWS}`,
+          canSwapRoles: true,
+          onRematch: (swap) => this.handleRestart(swap),
+          onLobby: () => this.ctx.sync.setState({ host_location: null })
+        });
       } else {
         // Stay on same row so player can try the other side
         this.avatarRow = nextRow - 1;
       }
+    } else {
+      sound.boing(320);
+      haptic(20);
     }
   }
 
@@ -1241,6 +1451,11 @@ export class CrystalBridgeGame implements GameModule {
   }
 
   private onStateChange = (state: any) => {
+    if (state.cbRestart && state.cbRestart.ts !== this.lastActionTs) {
+      this.lastActionTs = state.cbRestart.ts;
+      this.handleRestart(state.cbRestart.swapRoles);
+    }
+
     // Host receives step from guest
     if (this.ctx.isHost && state.cbStep && state.cbStep.ts !== this.lastActionTs) {
       this.lastActionTs = state.cbStep.ts;
@@ -1646,6 +1861,9 @@ export class StarFishingGame implements GameModule {
       if (diff < SF_COORDINATION_WINDOW) {
         // SUCCESS! Coordination achieved
         this.score++;
+        sound.star();
+        haptic(25);
+
         // Remove star and replace
         const idx = this.stars.findIndex(s => s.id === tap.id);
         if (idx !== -1) {
@@ -1663,6 +1881,7 @@ export class StarFishingGame implements GameModule {
     
     // Store tap for future coordination
     this.lastTaps[tap.id] = tap;
+    sound.click();
   }
 
   private broadcastState(hit?: { x: number, y: number }) {
@@ -1855,29 +2074,48 @@ export class InverseGravityGame implements GameModule {
     this.distance = 0;
   }
 
+  private handleRestart(swapRoles = false) {
+    if (swapRoles) {
+      this.ctx.isHost = !this.ctx.isHost;
+      showToast(this.ctx.isHost ? '🚀 Ahora controlas la Gravedad' : '🛡️ Ahora controlas el Escudo');
+    }
+    this.reset();
+    if (this.ctx.isHost) {
+      this.broadcastState();
+    } else {
+      this.ctx.sync.setState({ igRestart: { ts: Date.now(), swapRoles } });
+    }
+  }
+
   private onPointerDown = () => {
     if (this.gameOver) {
-      if (this.ctx.isHost) {
-        this.reset();
-        this.broadcastState();
-      }
+      this.handleRestart();
       return;
     }
 
     // Host flips gravity, Guest shields
     if (this.ctx.isHost) {
       this.gravityDir *= -1;
+      sound.boing(260);
+      haptic(20);
       this.ctx.sync.setState({ igFlip: { dir: this.gravityDir, ts: Date.now() } });
     } else {
       if (this.shieldTimer <= 0) {
         this.shieldActive = true;
         this.shieldTimer = 100; // frames
+        sound.thud(160);
+        haptic(25);
         this.ctx.sync.setState({ igShield: { active: true, ts: Date.now() } });
       }
     }
   };
 
   private onStateChange = (state: any) => {
+    if (state.igRestart && state.igRestart.ts !== this.lastActionTs) {
+      this.lastActionTs = state.igRestart.ts;
+      this.handleRestart(state.igRestart.swapRoles);
+    }
+
     if (this.ctx.isHost && state.igShield && state.igShield.ts !== this.lastActionTs) {
       this.lastActionTs = state.igShield.ts;
       this.shieldActive = true;
@@ -1968,7 +2206,30 @@ export class InverseGravityGame implements GameModule {
           
           this.lives--;
           this.obstacles.splice(i, 1);
-          if (this.lives <= 0) this.gameOver = true;
+          sound.explosion();
+          haptic([80, 80, 100]);
+
+          if (this.lives <= 0) {
+            this.gameOver = true;
+            const distInt = Math.floor(this.distance);
+            const won = distInt >= 300;
+            if (won) {
+              sound.victory();
+              profileManager.unlockBadge('gravity-pilot');
+              profileManager.addWin();
+            } else {
+              sound.defeat();
+              profileManager.resetStreak();
+            }
+            showRematchModal({
+              won,
+              title: won ? '¡Ases de la Gravedad! 🚀' : '¡Choque Gravitacional! 💥',
+              statsText: `Distancia recorrida: ${distInt}m ${won ? '(¡Meta de 300m lograda!)' : ''}`,
+              canSwapRoles: true,
+              onRematch: (swap) => this.handleRestart(swap),
+              onLobby: () => this.ctx.sync.setState({ host_location: null })
+            });
+          }
           continue;
         }
 
@@ -2124,6 +2385,8 @@ export class FingerHockeyGame implements GameModule {
   private maxScore = 5;
   private goalFlashTimer = 0;
   private goalMessage = '';
+  private matchEnded = false;
+
 
   // Pointer tracking
   private activePointer: number | null = null;
@@ -2175,6 +2438,10 @@ export class FingerHockeyGame implements GameModule {
 
   // ── Pointer handlers: each player drags their own mallet ──
   private onPointerDown = (e: PointerEvent) => {
+    if (this.matchEnded) {
+      this.handleRestart();
+      return;
+    }
     this.handlePointer(e);
   };
 
@@ -2375,6 +2642,11 @@ export class FingerHockeyGame implements GameModule {
   }
 
   private onStateChange = (state: any) => {
+    if (state.fhRestart && state.fhRestart.ts !== this.lastMalletTs) {
+      this.lastMalletTs = state.fhRestart.ts;
+      this.handleRestart();
+    }
+
     // Host receives guest mallet position
     if (this.ctx.isHost && state.fhMallet && state.fhMallet.ts !== this.lastMalletTs) {
       this.lastMalletTs = state.fhMallet.ts;
@@ -2528,6 +2800,42 @@ export class FingerHockeyGame implements GameModule {
       c.font = `${w * 0.035}px 'Patrick Hand', cursive`;
       c.fillStyle = '#636e72';
       c.fillText(`${this.scoreHumans} - ${this.scoreAI}`, w / 2, h * 0.56);
+
+      if (!this.matchEnded) {
+        this.matchEnded = true;
+        if (humansWon) {
+          sound.victory();
+          haptic([40, 50, 100]);
+          profileManager.unlockBadge('hockey-legend');
+          profileManager.addWin();
+        } else {
+          sound.defeat();
+          profileManager.resetStreak();
+        }
+
+        showRematchModal({
+          won: humansWon,
+          title: humansWon ? '¡Victoria de los Humanos! 🏒' : '¡La IA se llevó el partido! 🤖',
+          statsText: `Marcador Final: ${this.scoreHumans} - ${this.scoreAI}`,
+          onRematch: () => this.handleRestart(),
+          onLobby: () => this.ctx.sync.setState({ host_location: null })
+        });
+      }
+    }
+  }
+
+  private handleRestart() {
+    this.scoreHumans = 0;
+    this.scoreAI = 0;
+    this.matchEnded = false;
+    this.goalFlashTimer = 0;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+    this.resetPuck(w, h);
+    if (this.ctx.isHost) {
+      this.broadcastState();
+    } else {
+      this.ctx.sync.setState({ fhRestart: { ts: Date.now() } });
     }
   }
 

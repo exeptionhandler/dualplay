@@ -47,10 +47,36 @@ export interface PlayerInputMessage {
   payload: unknown;
 }
 
+export interface SocialReactionMessage {
+  type: 'reaction';
+  emoji: string;
+  from: string;
+  userName: string;
+  xRatio: number; // 0.0 - 1.0 for proportional positioning
+}
+
+export interface RematchMessage {
+  type: 'rematch';
+  requestedBy: string;
+  confirmed?: boolean;
+  swapRoles?: boolean;
+}
+
+export interface PingMarkerMessage {
+  type: 'ping-marker';
+  x: number;
+  y: number;
+  from: string;
+}
+
 export type DuoPlayMessage =
   | NavigateMessage
   | GameStartMessage
   | PingMessage
   | PongMessage
   | GameStateMessage
-  | PlayerInputMessage;
+  | PlayerInputMessage
+  | SocialReactionMessage
+  | RematchMessage
+  | PingMarkerMessage;
+
