@@ -1,6 +1,6 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { Sync } from './sync';
-import { renderLobby, renderGameView, showToast, setWaitingOverlay, triggerFloatingReaction } from './ui';
+import { renderLobby, renderGameView, showToast, setWaitingOverlay, triggerFloatingReaction, updateGamePartner, cleanupGameView } from './ui';
 import type { GameId } from './types';
 import { GAME_MODULES } from './games';
 import type { GameModule } from './games';
@@ -34,6 +34,10 @@ function getIsHost(): boolean {
 
 // ── Navigation state change handler ───────────────────
 function handleNavigationChange(state: any) {
+  if (state.host_location === null && currentScreen !== 'lobby') {
+    goLobby();
+    return;
+  }
   if (currentScreen === 'lobby') {
     renderLobby(participants, {
       onGameSelect: handleGameSelect,
@@ -175,6 +179,8 @@ function setupSyncListeners() {
         goLobby();
       } else if (participants.length >= 2) {
         setWaitingOverlay(false);
+        const partner = participants.find(p => p.id !== me?.id);
+        updateGamePartner(partner);
         if (gamePendingInit) {
           gamePendingInit.mod.init({
             canvas: gamePendingInit.canvas,
@@ -198,6 +204,7 @@ function setupSyncListeners() {
 
       if (currentScreen !== 'lobby' && participants.length < 2) {
         setWaitingOverlay(true);
+        updateGamePartner(null);
       } else if (currentScreen === 'lobby') {
         goLobby();
       }
@@ -217,6 +224,8 @@ function setupSyncListeners() {
 function goLobby(): void {
   currentScreen = 'lobby';
   duoBot.stop();
+  cleanupGameView();
+  document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
 
   if (!gamePendingInit) {
     currentGame?.destroy();
@@ -240,16 +249,21 @@ function goGame(gameId: GameId): void {
   if (!entry) return;
 
   currentScreen = gameId;
+  cleanupGameView();
+  document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
+
   if (!gamePendingInit) {
     currentGame?.destroy();
   }
   currentGame = null;
 
+  const partner = participants.find(p => p.id !== me?.id);
+
   const canvas = renderGameView(entry, {
     onBack: () => goLobby(),
     onPlayBot: () => handlePlayWithBot(),
     onReaction: (emoji) => handleSendReaction(emoji),
-  });
+  }, partner);
 
   const mod = GAME_MODULES[gameId]?.();
   if (mod) {
@@ -321,6 +335,7 @@ function handlePlayWithBot(): void {
   showToast('🤖 DuoBot se ha unido como compañero.');
 
   setWaitingOverlay(false);
+  updateGamePartner(DUOBOT_USER);
   duoBot.start(currentScreen);
 
   if (gamePendingInit) {
@@ -356,10 +371,25 @@ function handleSendReaction(emoji: string): void {
 
 // Keyboard shortcuts for reactions (1-6)
 window.addEventListener('keydown', (e) => {
+  // Prevent hotkey interference while user is typing (e.g. nickname in profile modal)
+  const target = e.target as HTMLElement | null;
+  const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+  if (isInput) return;
+
+  // Also prevent when any modal or backdrop is active
+  if (document.querySelector('.modal-backdrop')) return;
+
   const keyMap: Record<string, string> = {
     '1': '👏', '2': '😂', '3': '🔥', '4': '😱', '5': '❤️', '6': '👑'
   };
   if (keyMap[e.key] && currentScreen !== 'lobby') {
+    const btn = document.querySelector(`.reaction-btn[data-key="${e.key}"]`);
+    if (btn) {
+      btn.classList.add('spring-pop');
+      setTimeout(() => btn.classList.remove('spring-pop'), 400);
+    }
+    sound.pop ? sound.boing(450) : sound.click();
+    haptic(15);
     handleSendReaction(keyMap[e.key]);
   }
 });

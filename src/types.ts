@@ -9,7 +9,9 @@ export type GameId =
   | 'crystal-bridge'
   | 'star-fishing'
   | 'inverse-gravity'
-  | 'finger-hockey';
+  | 'finger-hockey'
+  | 'rhythm-duo'
+  | 'laser-mirror';
 
 export type MessageType =
   | 'navigate'          // Host tells guest to switch game/view

@@ -13,6 +13,11 @@ import type { Sync } from './sync';
 import { sound, haptic, ParticleSystem } from './audio';
 import { profileManager } from './badges';
 import { showRematchModal, showToast } from './ui';
+import { RhythmDuoGame } from './rhythm-duo';
+import { LaserMirrorGame } from './laser-mirror';
+
+export { RhythmDuoGame } from './rhythm-duo';
+export { LaserMirrorGame } from './laser-mirror';
 
 
 export interface GameContext {
@@ -80,6 +85,7 @@ export class TetrisDual implements GameModule {
   private ctx!: GameContext;
   private animId = 0;
   private canvasCtx!: CanvasRenderingContext2D;
+  private particles = new ParticleSystem();
   
   private COLS = 20;
   private ROWS = 20;
@@ -209,12 +215,20 @@ export class TetrisDual implements GameModule {
 
   private clearLines() {
     let linesCleared = 0;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+    const boardH = h * 0.8;
+    const cellSize = Math.min(w / this.COLS, boardH / this.ROWS);
+    const offsetX = (w - (cellSize * this.COLS)) / 2;
+    const offsetY = (boardH - (cellSize * this.ROWS)) / 2;
+
     for (let r = this.ROWS - 1; r >= 0; r--) {
       if (this.board[r].every(val => val !== 0)) {
         this.board.splice(r, 1);
         this.board.unshift(new Array(this.COLS).fill(0));
         r++; // check same row again
         linesCleared++;
+        this.particles.spawnConfetti(offsetX + (this.COLS * cellSize) / 2, offsetY + (r * cellSize), 28);
       }
     }
     if (linesCleared > 0) {
@@ -225,35 +239,38 @@ export class TetrisDual implements GameModule {
   }
 
   private processInput(playerId: string, action: string) {
-    const p = (this.ctx.isHost && playerId === this.ctx.me.id) ? this.p1 : 
-              (!this.ctx.isHost && playerId !== this.ctx.me.id) ? this.p2 : 
-              (playerId === this.ctx.me.id ? this.p2 : this.p1); // Simplified mapping
-    // To be precise: Let's assume P1 is always Host, P2 is Guest.
     const isP1 = (playerId === (this.ctx.isHost ? this.ctx.me.id : this.getOpponentId()));
     const targetP = isP1 ? this.p1 : this.p2;
     const otherP = isP1 ? this.p2 : this.p1;
 
     if (!targetP.active) return;
 
-    let dx = 0, dy = 0, dr = 0;
-    if (action === 'left') dx = -1;
-    if (action === 'right') dx = 1;
-    if (action === 'rot') dr = 1;
-    if (action === 'drop') dy = 1;
+    if (action === 'rot') {
+      const kicks = [0, -1, 1, -2, 2];
+      for (const k of kicks) {
+        if (!this.collides(targetP, k, 0, 1) && !this.collidesWithOther(targetP, otherP, k, 0, 1)) {
+          targetP.x += k;
+          targetP.rot += 1;
+          break;
+        }
+      }
+    } else {
+      let dx = 0, dy = 0;
+      if (action === 'left') dx = -1;
+      if (action === 'right') dx = 1;
+      if (action === 'drop') dy = 1;
 
-    if (!this.collides(targetP, dx, dy, dr) && !this.collidesWithOther(targetP, otherP, dx, dy, dr)) {
-      targetP.x += dx;
-      targetP.y += dy;
-      targetP.rot += dr;
+      if (!this.collides(targetP, dx, dy, 0) && !this.collidesWithOther(targetP, otherP, dx, dy, 0)) {
+        targetP.x += dx;
+        targetP.y += dy;
+      }
     }
     
     if (this.ctx.isHost) this.broadcastState();
   }
 
   private getOpponentId() {
-    // In a 2 player game, the one who is not me
-    return 'guest_id'; // Robo Sync doesn't easily expose participant list outside, but we can rely on state ownership or just a generic ID since Discord SDK handles connection. 
-    // Actually, we'll just check if the input came from me. If so, P1 (if host) or P2 (if guest).
+    return 'guest_id';
   }
 
   private onPointerDown = (e: PointerEvent) => {
@@ -287,7 +304,6 @@ export class TetrisDual implements GameModule {
   }
 
   private sendInput(action: string) {
-    // Predict locally for instant feedback
     const myPiece = this.ctx.isHost ? this.p1 : this.p2;
     const otherPiece = this.ctx.isHost ? this.p2 : this.p1;
     
@@ -296,17 +312,26 @@ export class TetrisDual implements GameModule {
       myPiece.y = dropY;
       sound.thud(120);
       haptic(30);
+    } else if (action === 'rot') {
+      const kicks = [0, -1, 1, -2, 2];
+      for (const k of kicks) {
+        if (!this.collides(myPiece, k, 0, 1) && !this.collidesWithOther(myPiece, otherPiece, k, 0, 1)) {
+          myPiece.x += k;
+          myPiece.rot += 1;
+          sound.click();
+          haptic(10);
+          break;
+        }
+      }
     } else {
-      let dx = 0, dy = 0, dr = 0;
+      let dx = 0, dy = 0;
       if (action === 'left') dx = -1;
       if (action === 'right') dx = 1;
-      if (action === 'rot') dr = 1;
       if (action === 'drop') dy = 1;
 
-      if (!this.collides(myPiece, dx, dy, dr) && !this.collidesWithOther(myPiece, otherPiece, dx, dy, dr)) {
+      if (!this.collides(myPiece, dx, dy, 0) && !this.collidesWithOther(myPiece, otherPiece, dx, dy, 0)) {
         myPiece.x += dx;
         myPiece.y += dy;
-        myPiece.rot += dr;
         sound.click();
         haptic(10);
       }
@@ -431,19 +456,22 @@ export class TetrisDual implements GameModule {
       }
     }
 
-    // Draw Ghost Pieces
+    // Draw Ghost Pieces with dotted projection line
     if (this.p1.active) {
       const gy1 = this.getGhostY(this.p1, this.p2);
-      this.drawPiece(c, { ...this.p1, y: gy1 }, cellSize, true, '#0984e3');
+      this.drawGhostPiece(c, this.p1, gy1, cellSize, '#0984e3');
     }
     if (this.p2.active) {
       const gy2 = this.getGhostY(this.p2, this.p1);
-      this.drawPiece(c, { ...this.p2, y: gy2 }, cellSize, true, '#ff7675');
+      this.drawGhostPiece(c, this.p2, gy2, cellSize, '#ff7675');
     }
 
     // Draw Active Pieces
-    if (this.p1.active) this.drawPiece(c, this.p1, cellSize, false, '#0984e3', 'P1 🔵');
-    if (this.p2.active) this.drawPiece(c, this.p2, cellSize, false, '#ff7675', 'P2 🔴');
+    if (this.p1.active) this.drawPiece(c, this.p1, cellSize, '#0984e3', 'P1 🔵');
+    if (this.p2.active) this.drawPiece(c, this.p2, cellSize, '#ff7675', 'P2 🔴');
+
+    // Partículas de limpieza de líneas
+    this.particles.updateAndDraw(c);
 
     // Border
     c.strokeStyle = 'var(--ink-primary)';
@@ -475,22 +503,56 @@ export class TetrisDual implements GameModule {
     }
   }
 
-  private drawPiece(c: CanvasRenderingContext2D, p: PieceState, size: number, isGhost = false, glowColor = '', label = '') {
+  private drawGhostPiece(c: CanvasRenderingContext2D, p: PieceState, gy: number, size: number, color: string) {
     const shape = this.getShape(p.id, p.rot);
-    if (isGhost) {
-      c.save();
-      c.globalAlpha = 0.25;
+
+    // 1. Líneas punteadas de proyección desde la pieza activa hasta la posición fantasma
+    c.save();
+    c.setLineDash([4, 4]);
+    c.strokeStyle = color;
+    c.lineWidth = 1.5;
+    c.globalAlpha = 0.4;
+    for (let col = 0; col < shape[0].length; col++) {
+      let lowestActiveR = -1;
       for (let r = 0; r < shape.length; r++) {
-        for (let col = 0; col < shape[r].length; col++) {
-          if (shape[r][col] !== 0) {
-            this.drawBlock(c, p.x + col, p.y + r, size, p.id);
-          }
+        if (shape[r][col] !== 0) lowestActiveR = r;
+      }
+      if (lowestActiveR >= 0) {
+        const lx = (p.x + col + 0.5) * size;
+        const startY = (p.y + lowestActiveR + 1) * size;
+        const endY = (gy + lowestActiveR) * size;
+        if (endY > startY) {
+          c.beginPath();
+          c.moveTo(lx, startY);
+          c.lineTo(lx, endY);
+          c.stroke();
         }
       }
-      c.restore();
-      return;
     }
+    c.restore();
 
+    // 2. Silueta punteada translúcida
+    c.save();
+    c.globalAlpha = 0.3;
+    c.setLineDash([3, 3]);
+    for (let r = 0; r < shape.length; r++) {
+      for (let col = 0; col < shape[r].length; col++) {
+        if (shape[r][col] !== 0) {
+          const gx = (p.x + col) * size;
+          const gyPos = (gy + r) * size;
+          c.fillStyle = color;
+          c.fillRect(gx + 2, gyPos + 2, size - 4, size - 4);
+          c.strokeStyle = color;
+          c.lineWidth = 1.5;
+          c.strokeRect(gx + 2, gyPos + 2, size - 4, size - 4);
+        }
+      }
+    }
+    c.restore();
+  }
+
+  private drawPiece(c: CanvasRenderingContext2D, p: PieceState, size: number, glowColor = '', label = '') {
+    const shape = this.getShape(p.id, p.rot);
     for (let r = 0; r < shape.length; r++) {
       for (let col = 0; col < shape[r].length; col++) {
         if (shape[r][col] !== 0) {
@@ -560,9 +622,17 @@ export class BalloonGame implements GameModule {
   private syncInterval: any = null;
   private lastPulseTs = 0;
   private squash = 1;
+  private squashVel = 0;
   private score = 0;
   private startTime = 0;
   private gameOver = false;
+
+  // Juice: Wind gusts & Floating counters
+  private wind = 0;
+  private windTimer = 0;
+  private nextWindCountdown = 280;
+  private windParticles: { x: number, y: number, vx: number, len: number }[] = [];
+  private floatCounters: { x: number, y: number, text: string, color: string, timer: number, scale: number }[] = [];
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
@@ -592,16 +662,26 @@ export class BalloonGame implements GameModule {
 
   private lastTapBy: string | null = null;
   private comboMultiplier = 1;
-  private wind = 0;
   private powerup: { x: number, y: number, type: 'star' | 'feather', radius: number, active: boolean } | null = null;
+  private powerupTimeout: any = null;
 
   private restart() {
+    if (this.powerupTimeout) {
+      clearTimeout(this.powerupTimeout);
+      this.powerupTimeout = null;
+    }
     this.balloon.x = this.ctx.canvas.width / 2;
     this.balloon.y = this.ctx.canvas.height * 0.4;
     this.balloon.vx = 0;
     this.balloon.vy = 0;
     this.score = 0;
     this.squash = 1;
+    this.squashVel = 0;
+    this.wind = 0;
+    this.windTimer = 0;
+    this.nextWindCountdown = 240;
+    this.windParticles = [];
+    this.floatCounters = [];
     this.gameOver = false;
     this.startTime = Date.now();
     this.lastTapBy = null;
@@ -624,7 +704,8 @@ export class BalloonGame implements GameModule {
   private handleTapLogic(userId: string) {
     this.balloon.vy = this.jumpForce;
     this.balloon.vx += (Math.random() - 0.5) * 3;
-    this.squash = 0.68;
+    this.squash = 0.52;
+    this.squashVel = -0.15;
 
     if (this.lastTapBy && this.lastTapBy !== userId) {
       this.comboMultiplier = Math.min(8, this.comboMultiplier + 1);
@@ -637,6 +718,16 @@ export class BalloonGame implements GameModule {
     this.lastTapBy = userId;
     this.score += this.comboMultiplier;
     haptic(20);
+
+    // Floating counter popup
+    this.floatCounters.push({
+      x: this.balloon.x + (Math.random() - 0.5) * 20,
+      y: this.balloon.y - 45,
+      text: this.comboMultiplier > 1 ? `x${this.comboMultiplier} COMBO! 🔥` : `+1 🎈`,
+      color: this.comboMultiplier > 1 ? '#d63031' : '#0984e3',
+      timer: 35,
+      scale: 1.6,
+    });
   }
 
   private onTap = () => {
@@ -710,11 +801,50 @@ export class BalloonGame implements GameModule {
     this.balloon.x += this.balloon.vx;
     this.balloon.vx *= 0.98; // Lateral friction
 
-    // Recovery from squash
-    this.squash += (1 - this.squash) * 0.15;
+    // Oscilación elástica de squash & stretch
+    this.squashVel += (1 - this.squash) * 0.28;
+    this.squashVel *= 0.76;
+    this.squash += this.squashVel;
 
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
+
+    // Ráfagas dinámicas de viento
+    if (this.ctx.isHost) {
+      this.nextWindCountdown--;
+      if (this.nextWindCountdown <= 0) {
+        this.nextWindCountdown = 260 + Math.floor(Math.random() * 120);
+        this.windTimer = 110;
+        this.wind = (Math.random() > 0.5 ? 1 : -1) * (1.6 + Math.random() * 1.5);
+        sound.windGust();
+        for (let i = 0; i < 6; i++) {
+          this.windParticles.push({
+            x: this.wind > 0 ? -20 : w + 20,
+            y: 70 + Math.random() * (h * 0.65),
+            vx: this.wind * (4 + Math.random() * 3),
+            len: 25 + Math.random() * 35,
+          });
+        }
+      }
+    }
+    if (this.windTimer > 0) {
+      this.windTimer--;
+      this.balloon.vx += this.wind * 0.045;
+    }
+    for (let i = this.windParticles.length - 1; i >= 0; i--) {
+      const wp = this.windParticles[i];
+      wp.x += wp.vx;
+      if (wp.x < -100 || wp.x > w + 100) this.windParticles.splice(i, 1);
+    }
+
+    // Actualizar contadores flotantes
+    for (let i = this.floatCounters.length - 1; i >= 0; i--) {
+      const fc = this.floatCounters[i];
+      fc.timer--;
+      fc.y -= 1.4;
+      fc.scale += (1 - fc.scale) * 0.12;
+      if (fc.timer <= 0) this.floatCounters.splice(i, 1);
+    }
 
     // Walls bounce
     if (this.balloon.x - this.balloon.radius < 10) {
@@ -746,7 +876,11 @@ export class BalloonGame implements GameModule {
         } else {
           this.balloon.vy = -7;
         }
-        setTimeout(() => this.spawnPowerup(), 7000);
+        if (this.powerupTimeout) clearTimeout(this.powerupTimeout);
+        this.powerupTimeout = setTimeout(() => {
+          this.powerupTimeout = null;
+          this.spawnPowerup();
+        }, 7000);
       }
     }
 
@@ -767,6 +901,19 @@ export class BalloonGame implements GameModule {
     const h = this.ctx.canvas.height;
 
     c.clearRect(0, 0, w, h);
+
+    // Ráfagas de viento visibles
+    c.save();
+    c.strokeStyle = 'rgba(116, 185, 255, 0.6)';
+    c.lineWidth = 2.5;
+    c.lineCap = 'round';
+    for (const wp of this.windParticles) {
+      c.beginPath();
+      c.moveTo(wp.x, wp.y);
+      c.lineTo(wp.x + (wp.vx > 0 ? wp.len : -wp.len), wp.y);
+      c.stroke();
+    }
+    c.restore();
 
     // Floor hazard spikes / grass
     c.strokeStyle = '#2d3436';
@@ -792,8 +939,15 @@ export class BalloonGame implements GameModule {
     c.fillStyle = this.comboMultiplier > 1 ? '#d63031' : '#2d3436';
     c.fillText(`🔥 Combo x${this.comboMultiplier}`, w / 2, 36);
 
+    if (this.windTimer > 0) {
+      c.fillStyle = '#0984e3';
+      c.font = 'bold 17px "Patrick Hand", cursive';
+      c.fillText(this.wind > 0 ? '🌬️ ¡Viento hacia la Derecha! ▶' : '◀ 🌬️ ¡Viento hacia la Izquierda!', w / 2, 64);
+    }
+
     c.fillStyle = '#2d3436';
     c.textAlign = 'right';
+    c.font = 'bold 22px "Patrick Hand", cursive';
     c.fillText(`⏱️ ${elapsed}s / 30s meta`, w - 20, 36);
 
     // Powerup floating bubble
@@ -814,10 +968,12 @@ export class BalloonGame implements GameModule {
       c.restore();
     }
 
+    // Globo con squash & stretch auténtico
     if (!this.gameOver) {
       c.save();
       c.translate(this.balloon.x, this.balloon.y);
-      c.scale(1 / this.squash, this.squash);
+      const safeSquash = Math.max(0.35, Math.min(1.8, this.squash));
+      c.scale(1 / Math.sqrt(safeSquash), safeSquash);
 
       // Doodle String
       c.beginPath();
@@ -868,12 +1024,26 @@ export class BalloonGame implements GameModule {
       c.restore();
     }
 
+    // Contadores de toques/combos flotantes
+    for (const fc of this.floatCounters) {
+      c.save();
+      c.font = `bold ${Math.floor(22 * fc.scale)}px "Patrick Hand", cursive`;
+      c.fillStyle = fc.color;
+      c.strokeStyle = 'white';
+      c.lineWidth = 4;
+      c.textAlign = 'center';
+      c.strokeText(fc.text, fc.x, fc.y);
+      c.fillText(fc.text, fc.x, fc.y);
+      c.restore();
+    }
+
     this.particles.updateAndDraw(c);
   }
 
   destroy(): void {
     cancelAnimationFrame(this.animId);
     if (this.syncInterval) clearInterval(this.syncInterval);
+    if (this.powerupTimeout) clearTimeout(this.powerupTimeout);
     this.ctx.canvas.removeEventListener('pointerdown', this.onTap);
     this.ctx.sync.off('stateChange', this.onStateChange);
   }
@@ -927,6 +1097,11 @@ export class MinesweeperGame implements GameModule {
   private lastActionTs = 0;
   private generated = false; // mines placed after first tap
 
+  // Juice: Real-time Player Cursors & Animated Flags
+  private p1Cursor = { r: -1, c: -1, active: false };
+  private p2Cursor = { r: -1, c: -1, active: false };
+  private flagAnims: Record<string, number> = {};
+
   init(ctx: GameContext): void {
     this.ctx = ctx;
     this.canvasCtx = ctx.canvas.getContext('2d')!;
@@ -934,6 +1109,9 @@ export class MinesweeperGame implements GameModule {
     this.won = false;
     this.flagMode = false;
     this.generated = false;
+    this.flagAnims = {};
+    this.p1Cursor = { r: -1, c: -1, active: false };
+    this.p2Cursor = { r: -1, c: -1, active: false };
 
     // Init empty board
     this.board = [];
@@ -945,6 +1123,8 @@ export class MinesweeperGame implements GameModule {
     }
 
     ctx.canvas.addEventListener('pointerdown', this.onPointerDown);
+    ctx.canvas.addEventListener('pointermove', this.onPointerMove);
+    ctx.canvas.addEventListener('pointerleave', this.onPointerLeave);
     ctx.sync.on('stateChange', this.onStateChange);
 
     // If Host, broadcast initial empty board
@@ -1029,15 +1209,17 @@ export class MinesweeperGame implements GameModule {
     }
 
     cell.display = 'revealed';
-    sound.click();
 
     if (cell.value === 0) {
+      sound.pleasantChord();
       // Flood fill empty cells
       for (let dr = -1; dr <= 1; dr++) {
         for (let dc = -1; dc <= 1; dc++) {
           this.reveal(r + dr, c + dc);
         }
       }
+    } else {
+      sound.playScaleNote(cell.value);
     }
   }
 
@@ -1056,7 +1238,12 @@ export class MinesweeperGame implements GameModule {
   private toggleFlag(r: number, c: number) {
     const cell = this.board[r][c];
     if (cell.display === 'revealed') return;
-    cell.display = cell.display === 'flagged' ? 'hidden' : 'flagged';
+    const willFlag = cell.display !== 'flagged';
+    cell.display = willFlag ? 'flagged' : 'hidden';
+    if (willFlag) {
+      this.flagAnims[`${r}_${c}`] = 1.0;
+      sound.click();
+    }
   }
 
   private handleRestart() {
@@ -1068,7 +1255,42 @@ export class MinesweeperGame implements GameModule {
     }
   }
 
-  // ── Pointer handler ──
+  // ── Pointer handlers ──
+  private onPointerMove = (e: PointerEvent) => {
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const w = this.ctx.canvas.width;
+    const h = this.ctx.canvas.height;
+    const boardH = h * 0.85;
+    const cellSize = Math.min(w / MS_COLS, boardH / MS_ROWS);
+    const offsetX = (w - cellSize * MS_COLS) / 2;
+    const offsetY = (boardH - cellSize * MS_ROWS) / 2;
+
+    const col = Math.floor((px - offsetX) / cellSize);
+    const row = Math.floor((py - offsetY) / cellSize);
+
+    if (row >= 0 && row < MS_ROWS && col >= 0 && col < MS_COLS) {
+      const myCur = this.ctx.isHost ? this.p1Cursor : this.p2Cursor;
+      if (myCur.r !== row || myCur.c !== col || !myCur.active) {
+        myCur.r = row;
+        myCur.c = col;
+        myCur.active = true;
+        this.ctx.sync.setState({
+          msCursor: { r: row, c: col, by: this.ctx.me.id, ts: Date.now() }
+        });
+      }
+    }
+  };
+
+  private onPointerLeave = () => {
+    const myCur = this.ctx.isHost ? this.p1Cursor : this.p2Cursor;
+    myCur.active = false;
+    this.ctx.sync.setState({
+      msCursor: { r: -1, c: -1, by: this.ctx.me.id, ts: Date.now() }
+    });
+  };
+
   private onPointerDown = (e: PointerEvent) => {
     if (this.gameOver || this.won) {
       this.handleRestart();
@@ -1210,6 +1432,17 @@ export class MinesweeperGame implements GameModule {
       if (this.ctx.isHost) this.broadcastBoard();
     }
 
+    if (state.msCursor && state.msCursor.by !== this.ctx.me.id) {
+      const peerCur = this.ctx.isHost ? this.p2Cursor : this.p1Cursor;
+      if (state.msCursor.r >= 0) {
+        peerCur.r = state.msCursor.r;
+        peerCur.c = state.msCursor.c;
+        peerCur.active = true;
+      } else {
+        peerCur.active = false;
+      }
+    }
+
     // Host processes actions from guest
     if (this.ctx.isHost && state.msAction && state.msAction.ts !== this.lastActionTs) {
       this.lastActionTs = state.msAction.ts;
@@ -1333,7 +1566,7 @@ export class MinesweeperGame implements GameModule {
             c.restore();
           }
         } else if (cell.display === 'flagged') {
-          // Raised cell with flag
+          // Raised cell with animated waving flag
           c.fillStyle = '#e8e4df';
           c.strokeStyle = '#2d3436';
           c.lineWidth = 2;
@@ -1342,10 +1575,12 @@ export class MinesweeperGame implements GameModule {
           c.fill();
           c.stroke();
 
-          // Draw flag (doodle style)
-          const fx = x + cellSize * 0.45;
-          const fy = y + cellSize * 0.2;
-          const fh = cellSize * 0.6;
+          // Draw animated waving flag
+          const fx = x + cellSize * 0.42;
+          const fy = y + cellSize * 0.18;
+          const fh = cellSize * 0.62;
+          const wave = Math.sin(Date.now() * 0.007 + r * 2 + col) * 4;
+
           // Pole
           c.strokeStyle = '#2d3436';
           c.lineWidth = 2.5;
@@ -1354,12 +1589,13 @@ export class MinesweeperGame implements GameModule {
           c.moveTo(fx, fy);
           c.lineTo(fx, fy + fh);
           c.stroke();
-          // Flag triangle
+
+          // Animated Waving Flag fabric
           c.fillStyle = '#ff7675';
           c.beginPath();
           c.moveTo(fx, fy);
-          c.lineTo(fx + cellSize * 0.35, fy + cellSize * 0.15);
-          c.lineTo(fx, fy + cellSize * 0.3);
+          c.quadraticCurveTo(fx + cellSize * 0.2 + wave, fy + cellSize * 0.08, fx + cellSize * 0.38 + wave, fy + cellSize * 0.16);
+          c.lineTo(fx, fy + cellSize * 0.32);
           c.closePath();
           c.fill();
           c.strokeStyle = '#2d3436';
@@ -1367,6 +1603,14 @@ export class MinesweeperGame implements GameModule {
           c.stroke();
         }
       }
+    }
+
+    // Indicadores de Cursor de Jugadores en tiempo real
+    if (this.p1Cursor.active && this.p1Cursor.r >= 0 && this.p1Cursor.r < MS_ROWS && this.p1Cursor.c >= 0 && this.p1Cursor.c < MS_COLS) {
+      this.drawPlayerCursor(c, this.p1Cursor.c * cellSize, this.p1Cursor.r * cellSize, cellSize, '#0984e3', 'P1 🔵');
+    }
+    if (this.p2Cursor.active && this.p2Cursor.r >= 0 && this.p2Cursor.r < MS_ROWS && this.p2Cursor.c >= 0 && this.p2Cursor.c < MS_COLS) {
+      this.drawPlayerCursor(c, this.p2Cursor.c * cellSize, this.p2Cursor.r * cellSize, cellSize, '#e17055', 'P2 🔴');
     }
 
     // Outer border
@@ -1435,9 +1679,27 @@ export class MinesweeperGame implements GameModule {
     }
   }
 
+  private drawPlayerCursor(c: CanvasRenderingContext2D, x: number, y: number, size: number, color: string, label: string) {
+    c.save();
+    const pulse = 1 + Math.sin(Date.now() * 0.008) * 0.08;
+    c.strokeStyle = color;
+    c.lineWidth = 3;
+    c.setLineDash([4, 4]);
+    c.strokeRect(x - 2, y - 2, size + 4, size + 4);
+
+    c.setLineDash([]);
+    c.fillStyle = color;
+    c.font = 'bold 12px "Patrick Hand", cursive';
+    c.textAlign = 'left';
+    c.fillText(label, x + 2, y - 5);
+    c.restore();
+  }
+
   destroy(): void {
     cancelAnimationFrame(this.animId);
     this.ctx.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.ctx.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.ctx.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     this.ctx.sync.off('stateChange', this.onStateChange);
   }
 }
@@ -1487,6 +1749,11 @@ export class CrystalBridgeGame implements GameModule {
   // Host guide ping beacon
   private pingBeacon: { row: number, side: 'left' | 'right', timer: number } | null = null;
 
+  // Juice: Checkpoint & Comic Fall
+  private checkpointRow = 3; // Punto de control en la fila 4 (índice 3)
+  private comicFallTimer = 0;
+  private smokeClouds: { x: number, y: number, r: number, alpha: number, vx: number, vy: number }[] = [];
+
   init(ctx: GameContext): void {
     this.ctx = ctx;
     this.canvasCtx = ctx.canvas.getContext('2d')!;
@@ -1496,6 +1763,8 @@ export class CrystalBridgeGame implements GameModule {
     this.avatarRow = -1;
     this.avatarSide = null;
     this.shakeTimer = 0;
+    this.comicFallTimer = 0;
+    this.smokeClouds = [];
     this.jumpProgress = 1;
     this.isJumping = false;
     this.pingBeacon = null;
@@ -1516,6 +1785,21 @@ export class CrystalBridgeGame implements GameModule {
     }
 
     this.loop();
+  }
+
+  private spawnSmokePuff(x: number, y: number) {
+    for (let i = 0; i < 12; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 1.2 + Math.random() * 2.5;
+      this.smokeClouds.push({
+        x: x + Math.cos(angle) * 6,
+        y: y + Math.sin(angle) * 6,
+        r: 10 + Math.random() * 10,
+        alpha: 0.85,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 0.4,
+      });
+    }
   }
 
   private handleRestart(swapRoles = false) {
@@ -1607,9 +1891,12 @@ export class CrystalBridgeGame implements GameModule {
 
     if (!safe) {
       this.lives--;
-      this.shakeTimer = 22;
+      this.shakeTimer = 24;
+      this.comicFallTimer = 36;
+      sound.comicWhistle();
       sound.explosion();
       haptic([100, 100, 150]);
+      this.spawnSmokePuff(this.avatarX, this.avatarY);
 
       if (this.lives <= 0) {
         this.gameOver = true;
@@ -1629,8 +1916,13 @@ export class CrystalBridgeGame implements GameModule {
           onLobby: () => this.ctx.sync.setState({ host_location: null })
         });
       } else {
-        // Fallback to previous safe row so they can try the other side
-        this.avatarRow = nextRow - 1;
+        // Si ya superaron el checkpoint, reaparecen en el checkpoint
+        if (nextRow > this.checkpointRow) {
+          this.avatarRow = this.checkpointRow;
+          showToast('🚩 ¡Punto de Control! Reaparecen en la fila 4.');
+        } else {
+          this.avatarRow = nextRow - 1;
+        }
       }
     } else {
       sound.boing(320);
@@ -1735,6 +2027,19 @@ export class CrystalBridgeGame implements GameModule {
     if (this.pingBeacon && this.pingBeacon.timer > 0) {
       this.pingBeacon.timer--;
       if (this.pingBeacon.timer <= 0) this.pingBeacon = null;
+    }
+
+    if (this.comicFallTimer > 0) {
+      this.comicFallTimer--;
+    }
+
+    for (let i = this.smokeClouds.length - 1; i >= 0; i--) {
+      const sc = this.smokeClouds[i];
+      sc.x += sc.vx;
+      sc.y += sc.vy;
+      sc.r += 0.35;
+      sc.alpha -= 0.024;
+      if (sc.alpha <= 0) this.smokeClouds.splice(i, 1);
     }
 
     if (this.isJumping) {
@@ -1871,7 +2176,6 @@ export class CrystalBridgeGame implements GameModule {
       else if (this.avatarSide === 'right') targetX = rightX + tileW / 2;
     }
 
-    // Smooth Parabolic Arc Interpolation
     if (this.avatarX === 0 && this.avatarY === 0) {
       this.avatarX = targetX;
       this.avatarY = targetY;
@@ -1887,19 +2191,48 @@ export class CrystalBridgeGame implements GameModule {
     const parabolicArc = Math.sin(this.jumpProgress * Math.PI) * 28;
     const renderY = this.avatarY - parabolicArc;
 
-    // Draw avatar
+    // Nubes de humo cómico al caer
+    for (const sc of this.smokeClouds) {
+      c.save();
+      c.fillStyle = `rgba(240, 240, 240, ${sc.alpha})`;
+      c.strokeStyle = `rgba(180, 180, 180, ${sc.alpha})`;
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.arc(sc.x, sc.y, sc.r, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+      c.restore();
+    }
+
+    // Draw avatar (o animación de caída cómica)
     if (!this.gameOver) {
       c.save();
-      c.font = `${rowH * 0.58}px serif`;
-      c.textAlign = 'center';
-      c.textBaseline = 'middle';
-      // Shadow
-      c.fillStyle = 'rgba(0,0,0,0.15)';
-      c.beginPath();
-      c.ellipse(this.avatarX, this.avatarY + 12, 14, 6, 0, 0, Math.PI * 2);
-      c.fill();
-      // Avatar emoji
-      c.fillText('🧍', this.avatarX, renderY);
+      c.translate(this.avatarX, renderY);
+
+      if (this.comicFallTimer > 0) {
+        // Caída cómica estilo garabato
+        const wobble = Math.sin(Date.now() * 0.05) * 0.35;
+        c.rotate(wobble);
+        c.font = `${rowH * 0.65}px serif`;
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText('😵‍💫', 0, 0);
+
+        c.font = 'bold 16px "Patrick Hand", cursive';
+        c.fillStyle = '#ff7675';
+        c.fillText('¡AYYY! 💦', 0, -28);
+      } else {
+        // Shadow
+        c.fillStyle = 'rgba(0,0,0,0.15)';
+        c.beginPath();
+        c.ellipse(0, 12, 14, 6, 0, 0, Math.PI * 2);
+        c.fill();
+        // Avatar emoji normal
+        c.font = `${rowH * 0.58}px serif`;
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText('🧍', 0, 0);
+      }
       c.restore();
     }
 
@@ -1942,12 +2275,13 @@ export class CrystalBridgeGame implements GameModule {
     rowIdx: number, sideIdx: number, isSafe: boolean
   ) {
     const wasRevealed = this.revealed[rowIdx]?.[sideIdx];
+    const isCheckpoint = rowIdx === this.checkpointRow;
 
     if (wasRevealed) {
       if (isSafe) {
         c.fillStyle = 'rgba(116, 185, 255, 0.3)';
-        c.strokeStyle = '#74b9ff';
-        c.lineWidth = 3;
+        c.strokeStyle = isCheckpoint ? '#f1c40f' : '#74b9ff';
+        c.lineWidth = isCheckpoint ? 4 : 3;
         c.beginPath();
         c.roundRect(x, y, w, h, 6);
         c.fill();
@@ -1988,24 +2322,36 @@ export class CrystalBridgeGame implements GameModule {
       const isHostHint = this.ctx.isHost && isSafe;
 
       c.fillStyle = isHostHint ? 'rgba(85, 239, 196, 0.22)' : 'rgba(200, 200, 200, 0.25)';
-      c.strokeStyle = '#2d3436';
-      c.lineWidth = 2.5;
+      c.strokeStyle = isCheckpoint ? '#f39c12' : '#2d3436';
+      c.lineWidth = isCheckpoint ? 3.5 : 2.5;
       c.beginPath();
       c.roundRect(x, y, w, h, 6);
       c.fill();
       c.stroke();
 
-      // Glass sheen effect
-      c.strokeStyle = 'rgba(255,255,255,0.5)';
-      c.lineWidth = 1.5;
+      // Brillo sutil cristalino animado (diagonal shimmer)
+      const gleamProgress = ((Date.now() / 2400) + rowIdx * 0.18 + sideIdx * 0.09) % 1;
+      const gx = x + gleamProgress * (w + 40) - 20;
+      c.save();
       c.beginPath();
-      c.moveTo(x + w * 0.15, y + h * 0.2);
-      c.lineTo(x + w * 0.35, y + h * 0.2);
-      c.stroke();
+      c.roundRect(x, y, w, h, 6);
+      c.clip();
+      c.fillStyle = 'rgba(255, 255, 255, 0.32)';
       c.beginPath();
-      c.moveTo(x + w * 0.15, y + h * 0.35);
-      c.lineTo(x + w * 0.25, y + h * 0.35);
-      c.stroke();
+      c.moveTo(gx, y);
+      c.lineTo(gx + 12, y);
+      c.lineTo(gx - 6, y + h);
+      c.lineTo(gx - 18, y + h);
+      c.fill();
+      c.restore();
+
+      // Indicador sutil de checkpoint en la fila 4
+      if (isCheckpoint) {
+        c.fillStyle = '#f39c12';
+        c.font = 'bold 11px "Patrick Hand", cursive';
+        c.textAlign = 'right';
+        c.fillText('🚩 CP', x + w - 4, y + 13);
+      }
 
       // Host sees a radiant green beacon marker
       if (isHostHint) {
@@ -2049,7 +2395,7 @@ interface Star {
   vy: number;
   size: number;
   hue: number;
-  type: 'normal' | 'golden' | 'chrono';
+  type: 'normal' | 'golden' | 'chrono' | 'legendary' | 'fish';
   tappedBy?: string;
   tappedTs?: number;
 }
@@ -2111,18 +2457,22 @@ export class StarFishingGame implements GameModule {
     const w = this.ctx.canvas.width;
     const h = this.ctx.canvas.height;
     const roll = Math.random();
-    let type: 'normal' | 'golden' | 'chrono' = 'normal';
-    if (roll < 0.2) type = 'golden';
-    else if (roll < 0.3) type = 'chrono';
+    let type: 'normal' | 'golden' | 'chrono' | 'legendary' | 'fish' = 'normal';
+    if (roll < 0.12) type = 'legendary';
+    else if (roll < 0.3) type = 'fish';
+    else if (roll < 0.48) type = 'golden';
+    else if (roll < 0.62) type = 'chrono';
+
+    const speed = type === 'legendary' ? 3.0 : type === 'fish' ? 2.6 : type === 'golden' ? 2.4 : 1.9;
 
     return {
       id: Math.random().toString(36).substring(2, 9),
       x: 30 + Math.random() * (w - 60),
       y: 70 + Math.random() * (h - 140),
-      vx: (Math.random() - 0.5) * (type === 'golden' ? 2.8 : 2.0),
-      vy: (Math.random() - 0.5) * (type === 'golden' ? 2.8 : 2.0),
-      size: type === 'golden' ? 32 : type === 'chrono' ? 28 : 25 + Math.random() * 8,
-      hue: type === 'golden' ? 45 : type === 'chrono' ? 180 : Math.random() * 360,
+      vx: (Math.random() - 0.5) * speed,
+      vy: (Math.random() - 0.5) * speed,
+      size: type === 'legendary' ? 36 : type === 'fish' ? 32 : type === 'golden' ? 30 : type === 'chrono' ? 28 : 25 + Math.random() * 8,
+      hue: type === 'legendary' ? 48 : type === 'fish' ? 210 : type === 'golden' ? 45 : type === 'chrono' ? 180 : Math.random() * 360,
       type
     };
   }
@@ -2254,15 +2604,28 @@ export class StarFishingGame implements GameModule {
           const s = this.stars[starIdx];
           const hitX = s.x;
           const hitY = s.y;
+          const isInstantSync = diff < 220; // Captura simultánea exacta
           let pts = 1;
           let feedbackText = '+1 ⭐';
           let feedbackColor = '#00b894';
 
-          if (s.type === 'golden') {
+          if (s.type === 'legendary') {
+            pts = 6;
+            feedbackText = '¡ESTRELLA LEGENDARIA! 👑 +6';
+            feedbackColor = '#f1c40f';
+            sound.victory();
+            haptic([50, 70, 120]);
+          } else if (s.type === 'fish') {
+            pts = 3;
+            feedbackText = '¡PEZ DORADO! 🐟 +3';
+            feedbackColor = '#0984e3';
+            sound.star();
+            haptic([30, 40]);
+          } else if (s.type === 'golden') {
             pts = 3;
             feedbackText = '¡SUPER COMBO! +3 ✨';
             feedbackColor = '#f39c12';
-            sound.victory();
+            sound.star();
             haptic([40, 50, 80]);
           } else if (s.type === 'chrono') {
             this.timeLeft = Math.min(SF_ROUND_SECONDS, this.timeLeft + 8);
@@ -2275,8 +2638,16 @@ export class StarFishingGame implements GameModule {
             haptic(25);
           }
 
+          // Bonus de Captura Sincronizada
+          if (isInstantSync) {
+            pts += 2;
+            feedbackText = `¡CAPTURA SINCRONIZADA! 🔥 +${pts}`;
+            feedbackColor = '#e17055';
+            sound.victory();
+          }
+
           this.score += pts;
-          this.particles.spawnConfetti(hitX, hitY, s.type === 'golden' ? 35 : 20);
+          this.particles.spawnConfetti(hitX, hitY, isInstantSync ? 45 : s.type === 'legendary' ? 40 : 22);
           this.addFeedback(hitX, hitY, feedbackText, feedbackColor);
 
           // Replace star
@@ -2383,7 +2754,7 @@ export class StarFishingGame implements GameModule {
     c.font = `${w * 0.036}px 'Patrick Hand', cursive`;
     c.fillStyle = '#636e72';
     c.textAlign = 'center';
-    c.fillText('¡Toquen la misma estrella casi al unísono!', w / 2, h - 20);
+    c.fillText('¡Toquen juntos casi al unísono para Captura Sincronizada! 🔥', w / 2, h - 20);
 
     // Game Over Overlay
     if (this.gameOver) {
@@ -2435,12 +2806,52 @@ export class StarFishingGame implements GameModule {
       c.restore();
     }
 
-    c.rotate(now * (star.type === 'golden' ? 0.004 : 0.002));
+    // Dibujo de Pez Nadador animado
+    if (star.type === 'fish') {
+      const swimAngle = Math.atan2(star.vy, star.vx);
+      c.rotate(swimAngle);
+      const wag = Math.sin(now * 0.015) * 6;
+
+      // Aleta trasera ondulante
+      c.fillStyle = '#fdcb6e';
+      c.strokeStyle = '#2d3436';
+      c.lineWidth = 2.5;
+      c.beginPath();
+      c.moveTo(-size * 0.5, 0);
+      c.lineTo(-size * 0.9, -size * 0.35 + wag);
+      c.lineTo(-size * 0.7, 0 + wag * 0.5);
+      c.lineTo(-size * 0.9, size * 0.35 + wag);
+      c.closePath();
+      c.fill();
+      c.stroke();
+
+      // Cuerpo ovalado de pez doodle
+      c.fillStyle = '#ff7675';
+      c.beginPath();
+      c.ellipse(0, 0, size * 0.6, size * 0.35, 0, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+
+      // Ojo
+      c.fillStyle = '#2d3436';
+      c.beginPath();
+      c.arc(size * 0.32, -size * 0.1, 3, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = 'white';
+      c.beginPath();
+      c.arc(size * 0.34, -size * 0.12, 1.2, 0, Math.PI * 2);
+      c.fill();
+
+      c.restore();
+      return;
+    }
+
+    c.rotate(now * (star.type === 'legendary' ? 0.005 : star.type === 'golden' ? 0.004 : 0.002));
 
     c.beginPath();
-    const spikes = 5;
+    const spikes = star.type === 'legendary' ? 7 : 5;
     const outerRadius = size;
-    const innerRadius = size * 0.42;
+    const innerRadius = size * (star.type === 'legendary' ? 0.48 : 0.42);
     let rot = (Math.PI / 2) * 3;
     let x = 0;
     let y = 0;
@@ -2461,7 +2872,11 @@ export class StarFishingGame implements GameModule {
     c.lineTo(0, -outerRadius);
     c.closePath();
 
-    if (star.type === 'golden') {
+    if (star.type === 'legendary') {
+      c.fillStyle = '#ffeaa7';
+      c.shadowColor = '#fdcb6e';
+      c.shadowBlur = 16;
+    } else if (star.type === 'golden') {
       c.fillStyle = '#f1c40f';
       c.shadowColor = '#f39c12';
       c.shadowBlur = 10;
@@ -2480,7 +2895,13 @@ export class StarFishingGame implements GameModule {
     c.stroke();
 
     // Doodle inner icon / lines
-    if (star.type === 'golden') {
+    if (star.type === 'legendary') {
+      c.font = 'bold 15px "Patrick Hand", cursive';
+      c.fillStyle = '#2d3436';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('👑', 0, 0);
+    } else if (star.type === 'golden') {
       c.font = 'bold 14px "Patrick Hand", cursive';
       c.fillStyle = '#2d3436';
       c.textAlign = 'center';
@@ -2532,6 +2953,7 @@ interface EnergyOrb {
   id: string;
   x: number;
   y: number;
+  type: 'energy' | 'shield' | 'boost';
   collected: boolean;
 }
 
@@ -2726,9 +3148,10 @@ export class InverseGravityGame implements GameModule {
     const h = this.ctx.canvas.height;
     const w = this.ctx.canvas.width;
 
-    // Smooth backflip rotation
-    const targetAngle = this.gravityDir === -1 ? Math.PI : 0;
-    this.playerAngle += (targetAngle - this.playerAngle) * 0.22;
+    // Física fluida: Inclinación dinámica según velocidad vertical
+    const targetBase = this.gravityDir === -1 ? Math.PI : 0;
+    const dynamicTilt = targetBase + (this.playerVY * 0.04 * this.gravityDir);
+    this.playerAngle += (dynamicTilt - this.playerAngle) * 0.22;
 
     // Laser & visual timers
     if (this.laserBeam && this.laserBeam.timer > 0) {
@@ -2749,8 +3172,9 @@ export class InverseGravityGame implements GameModule {
     }
 
     if (this.ctx.isHost) {
-      // Physics
+      // Física fluida con amortiguación
       this.playerVY += IG_GRAVITY * this.gravityDir;
+      this.playerVY = Math.max(-8.5, Math.min(8.5, this.playerVY));
       this.playerY += this.playerVY;
 
       const margin = 42;
@@ -2777,12 +3201,15 @@ export class InverseGravityGame implements GameModule {
         });
       }
 
-      // Spawn energy orbs
-      if (Math.random() < 0.012) {
+      // Spawn energy orbs (orbes flotantes variados)
+      if (Math.random() < 0.022) {
+        const roll = Math.random();
+        const type: 'energy' | 'shield' | 'boost' = roll < 0.25 ? 'shield' : roll < 0.55 ? 'boost' : 'energy';
         this.orbs.push({
           id: Math.random().toString(36).substring(2, 9),
           x: w,
           y: margin + Math.random() * (h - margin * 2),
+          type,
           collected: false
         });
       }
@@ -2795,11 +3222,20 @@ export class InverseGravityGame implements GameModule {
         const dy = orb.y - this.playerY;
         if (!orb.collected && Math.sqrt(dx * dx + dy * dy) < 32) {
           orb.collected = true;
-          this.distance += 5;
+          if (orb.type === 'shield') {
+            this.shieldActive = true;
+            this.shieldTimer = 130;
+            this.floatTexts.push({ x: orb.x, y: orb.y - 10, text: '🛡️ ¡ESCUDO!', timer: 28 });
+          } else if (orb.type === 'boost') {
+            this.distance += 12;
+            this.floatTexts.push({ x: orb.x, y: orb.y - 10, text: '⚡ +12m TURBO!', timer: 28 });
+          } else {
+            this.distance += 6;
+            this.floatTexts.push({ x: orb.x, y: orb.y - 10, text: '+6m ⭐', timer: 25 });
+          }
           sound.star();
-          haptic(20);
-          this.particles.spawnConfetti(orb.x, orb.y, 12);
-          this.floatTexts.push({ x: orb.x, y: orb.y - 10, text: '+5m ⭐', timer: 25 });
+          haptic(22);
+          this.particles.spawnConfetti(orb.x, orb.y, 16);
         }
         if (orb.x < -20 || orb.collected) this.orbs.splice(i, 1);
       }
@@ -2909,13 +3345,22 @@ export class InverseGravityGame implements GameModule {
       c.restore();
     }
 
-    // Energy orbs
+    // Orbes de gravedad flotantes con animación bobbing y aura
     for (const orb of this.orbs) {
+      const bobY = orb.y + Math.sin(Date.now() * 0.007 + orb.x * 0.04) * 6;
       c.save();
-      c.font = '22px serif';
+      c.beginPath();
+      c.arc(orb.x, bobY, 15, 0, Math.PI * 2);
+      c.fillStyle = orb.type === 'shield' ? 'rgba(9, 132, 227, 0.3)' : orb.type === 'boost' ? 'rgba(0, 206, 201, 0.3)' : 'rgba(253, 203, 110, 0.3)';
+      c.fill();
+      c.strokeStyle = orb.type === 'shield' ? '#0984e3' : orb.type === 'boost' ? '#00cec9' : '#fdcb6e';
+      c.lineWidth = 2.5;
+      c.stroke();
+
+      c.font = '16px serif';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
-      c.fillText('⭐', orb.x, orb.y);
+      c.fillText(orb.type === 'shield' ? '🛡️' : orb.type === 'boost' ? '⚡' : '⭐', orb.x, bobY);
       c.restore();
     }
 
@@ -2936,10 +3381,26 @@ export class InverseGravityGame implements GameModule {
       c.restore();
     }
 
-    // Player with Backflip Rotation
+    // Estela de partículas de propulsión detrás del personaje
     const px = w * 0.2;
     const py = this.playerY;
+    if (!this.gameOver) {
+      this.particles.particles.push({
+        x: px - 18,
+        y: py + (Math.random() - 0.5) * 6,
+        vx: -3.5 - Math.random() * 2.5,
+        vy: (Math.random() - 0.5) * 2,
+        rot: Math.random() * Math.PI,
+        vRot: (Math.random() - 0.5) * 0.2,
+        size: 7 + Math.random() * 6,
+        color: Math.random() < 0.5 ? '#fdcb6e' : Math.random() < 0.8 ? '#e17055' : '#00cec9',
+        char: Math.random() < 0.5 ? '✦' : '●',
+        life: 0,
+        maxLife: 20 + Math.random() * 8,
+      });
+    }
 
+    // Player with Backflip Rotation
     c.save();
     c.translate(px, py);
     c.rotate(this.playerAngle);
@@ -3068,6 +3529,13 @@ const FH_GOAL_W_RATIO = 0.42;
 
 interface Vec2 { x: number; y: number; }
 interface Disc extends Vec2 { vx: number; vy: number; r: number; }
+interface HockeyPowerUp {
+  id: string;
+  x: number;
+  y: number;
+  type: 'fire' | 'ice';
+  pulse: number;
+}
 
 export class FingerHockeyGame implements GameModule {
   private ctx!: GameContext;
@@ -3086,11 +3554,16 @@ export class FingerHockeyGame implements GameModule {
   private p1Prev: Vec2 = { x: 0, y: 0 };
   private p2Prev: Vec2 = { x: 0, y: 0 };
 
-  // Super hit / Fireball mechanic
+  // Super hit / Fireball & Ice puck mechanic
   private isSuperHit = false;
-  private puckTrail: { x: number, y: number, isSuper: boolean }[] = [];
+  private puckTrail: { x: number, y: number, isSuper: boolean, effect: string }[] = [];
   private shakeTimer = 0;
   private netWobble = 0;
+
+  // Power-up pickups
+  private powerUps: HockeyPowerUp[] = [];
+  private puckEffect: 'none' | 'fire' | 'ice' = 'none';
+  private puckEffectTimer = 0;
 
   // Score
   private scoreHumans = 0;
@@ -3116,6 +3589,9 @@ export class FingerHockeyGame implements GameModule {
     this.shakeTimer = 0;
     this.netWobble = 0;
     this.puckTrail = [];
+    this.powerUps = [];
+    this.puckEffect = 'none';
+    this.puckEffectTimer = 0;
 
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
@@ -3151,6 +3627,8 @@ export class FingerHockeyGame implements GameModule {
     this.puck.vy = (Math.random() < 0.5 ? -1 : 1) * 3;
     this.isSuperHit = false;
     this.puckTrail = [];
+    this.puckEffect = 'none';
+    this.puckEffectTimer = 0;
   }
 
   private onPointerDown = (e: PointerEvent) => {
@@ -3232,20 +3710,25 @@ export class FingerHockeyGame implements GameModule {
       const mvy = mallet.y - prevMallet.y;
       const malletSpeed = Math.sqrt(mvx * mvx + mvy * mvy);
 
+      // Elastic bumper physics with power-up momentum
+      const impulseMult = this.puckEffect === 'fire' ? 1.55 : 1.15;
+      const restitution = 0.92;
+
       // Check Smash Shot!
-      if (malletSpeed > 8.5) {
+      if (malletSpeed > 8.5 || this.puckEffect === 'fire') {
         this.isSuperHit = true;
-        this.shakeTimer = 12;
-        this.puck.vx = nx * 12 + mvx * 0.85;
-        this.puck.vy = ny * 12 + mvy * 0.85;
+        this.shakeTimer = 14;
+        this.puck.vx = (nx * 12.5 + mvx * 0.9) * impulseMult;
+        this.puck.vy = (ny * 12.5 + mvy * 0.9) * impulseMult;
         sound.explosion();
         haptic([40, 60, 80]);
-        this.particles.spawnConfetti(this.puck.x, this.puck.y, 14);
+        this.particles.spawnConfetti(this.puck.x, this.puck.y, 16);
       } else {
-        this.puck.vx = nx * 7 + mvx * 0.6;
-        this.puck.vy = ny * 7 + mvy * 0.6;
+        this.puck.vx = (nx * 7.5 + mvx * 0.65) * impulseMult * restitution;
+        this.puck.vy = (ny * 7.5 + mvy * 0.65) * impulseMult * restitution;
         sound.thud(220);
-        haptic(15);
+        haptic(16);
+        this.particles.spawnConfetti(this.puck.x, this.puck.y, 6);
       }
     }
   }
@@ -3262,11 +3745,13 @@ export class FingerHockeyGame implements GameModule {
       const overlap = minDist - dist;
       this.puck.x += nx * overlap;
       this.puck.y += ny * overlap;
-      this.puck.vx = nx * 6.5;
-      this.puck.vy = ny * 6.5;
+      const impulseMult = this.puckEffect === 'fire' ? 1.4 : 1.0;
+      this.puck.vx = nx * 6.8 * impulseMult;
+      this.puck.vy = ny * 6.8 * impulseMult;
       this.isSuperHit = false;
       sound.thud(180);
       haptic(15);
+      this.particles.spawnConfetti(this.puck.x, this.puck.y, 6);
     }
   }
 
@@ -3288,34 +3773,114 @@ export class FingerHockeyGame implements GameModule {
 
     this.updateAI(w, h);
 
+    // Spawn rink power-ups
+    if (this.powerUps.length < 2 && Math.random() < 0.007) {
+      this.powerUps.push({
+        id: Math.random().toString(36).substring(2, 7),
+        x: w * 0.2 + Math.random() * (w * 0.6),
+        y: h * 0.32 + Math.random() * (h * 0.36),
+        type: Math.random() < 0.5 ? 'fire' : 'ice',
+        pulse: 0
+      });
+    }
+
+    // Power-up pickups
+    for (let i = this.powerUps.length - 1; i >= 0; i--) {
+      const pu = this.powerUps[i];
+      pu.pulse += 0.05;
+      const dx = this.puck.x - pu.x;
+      const dy = this.puck.y - pu.y;
+      if (dx * dx + dy * dy < (FH_PUCK_R + 18) ** 2) {
+        this.puckEffect = pu.type;
+        this.puckEffectTimer = 340;
+        if (pu.type === 'fire') {
+          sound.powerupFire();
+          this.shakeTimer = 8;
+          this.particles.spawnConfetti(pu.x, pu.y, 22);
+          this.puck.vx *= 1.35;
+          this.puck.vy *= 1.35;
+        } else {
+          sound.powerupIce();
+          this.particles.spawnConfetti(pu.x, pu.y, 22);
+        }
+        this.powerUps.splice(i, 1);
+      }
+    }
+
+    if (this.puckEffectTimer > 0) {
+      this.puckEffectTimer--;
+      if (this.puckEffectTimer <= 0) {
+        this.puckEffect = 'none';
+      }
+    }
+
+    // Dynamic friction & max speed
+    const currentFriction = this.puckEffect === 'ice' ? 0.9988 : FH_FRICTION;
+    const currentMaxSpeed = this.puckEffect === 'fire' ? 24 : FH_MAX_SPEED;
+
     // Puck movement
     this.puck.x += this.puck.vx;
     this.puck.y += this.puck.vy;
-    this.puck.vx *= FH_FRICTION;
-    this.puck.vy *= FH_FRICTION;
+    this.puck.vx *= currentFriction;
+    this.puck.vy *= currentFriction;
 
     // Motion trail record
-    this.puckTrail.push({ x: this.puck.x, y: this.puck.y, isSuper: this.isSuperHit });
-    if (this.puckTrail.length > 8) this.puckTrail.shift();
+    this.puckTrail.push({ x: this.puck.x, y: this.puck.y, isSuper: this.isSuperHit, effect: this.puckEffect });
+    if (this.puckTrail.length > 9) this.puckTrail.shift();
 
-    const speed = Math.sqrt(this.puck.vx ** 2 + this.puck.vy ** 2);
-    if (speed < 5) this.isSuperHit = false;
-
-    if (speed > FH_MAX_SPEED) {
-      this.puck.vx = (this.puck.vx / speed) * FH_MAX_SPEED;
-      this.puck.vy = (this.puck.vy / speed) * FH_MAX_SPEED;
+    // Flight particles for power-ups
+    if (this.puckEffect === 'fire') {
+      this.particles.particles.push({
+        x: this.puck.x + (Math.random() - 0.5) * 8,
+        y: this.puck.y + (Math.random() - 0.5) * 8,
+        vx: -this.puck.vx * 0.2 + (Math.random() - 0.5) * 1.5,
+        vy: -this.puck.vy * 0.2 + (Math.random() - 0.5) * 1.5,
+        rot: Math.random() * Math.PI,
+        vRot: (Math.random() - 0.5) * 0.1,
+        size: 7 + Math.random() * 5,
+        color: Math.random() < 0.5 ? '#e17055' : '#f1c40f',
+        char: Math.random() < 0.6 ? '🔥' : '✦',
+        life: 0,
+        maxLife: 14 + Math.random() * 6
+      });
+    } else if (this.puckEffect === 'ice') {
+      this.particles.particles.push({
+        x: this.puck.x + (Math.random() - 0.5) * 8,
+        y: this.puck.y + (Math.random() - 0.5) * 8,
+        vx: -this.puck.vx * 0.15 + (Math.random() - 0.5) * 1.2,
+        vy: -this.puck.vy * 0.15 + (Math.random() - 0.5) * 1.2,
+        rot: Math.random() * Math.PI,
+        vRot: (Math.random() - 0.5) * 0.1,
+        size: 7 + Math.random() * 5,
+        color: '#00cec9',
+        char: Math.random() < 0.6 ? '❄️' : '✧',
+        life: 0,
+        maxLife: 14 + Math.random() * 6
+      });
     }
 
-    // Wall bounces
+    const speed = Math.sqrt(this.puck.vx ** 2 + this.puck.vy ** 2);
+    if (speed < 5 && this.puckEffect !== 'fire') this.isSuperHit = false;
+
+    if (speed > currentMaxSpeed) {
+      this.puck.vx = (this.puck.vx / speed) * currentMaxSpeed;
+      this.puck.vy = (this.puck.vy / speed) * currentMaxSpeed;
+    }
+
+    // Elastic Wall bounces
     if (this.puck.x - FH_PUCK_R < 0) {
       this.puck.x = FH_PUCK_R;
-      this.puck.vx = Math.abs(this.puck.vx) * 0.85;
-      if (this.isSuperHit) this.particles.spawnConfetti(this.puck.x, this.puck.y, 8);
+      this.puck.vx = Math.abs(this.puck.vx) * 0.92;
+      sound.thud(170);
+      this.particles.spawnConfetti(this.puck.x, this.puck.y, 5);
+      if (this.isSuperHit || this.puckEffect === 'fire') this.particles.spawnConfetti(this.puck.x, this.puck.y, 10);
     }
     if (this.puck.x + FH_PUCK_R > w) {
       this.puck.x = w - FH_PUCK_R;
-      this.puck.vx = -Math.abs(this.puck.vx) * 0.85;
-      if (this.isSuperHit) this.particles.spawnConfetti(this.puck.x, this.puck.y, 8);
+      this.puck.vx = -Math.abs(this.puck.vx) * 0.92;
+      sound.thud(170);
+      this.particles.spawnConfetti(this.puck.x, this.puck.y, 5);
+      if (this.isSuperHit || this.puckEffect === 'fire') this.particles.spawnConfetti(this.puck.x, this.puck.y, 10);
     }
 
     const goalW = w * FH_GOAL_W_RATIO;
@@ -3336,7 +3901,8 @@ export class FingerHockeyGame implements GameModule {
         return;
       } else {
         this.puck.y = FH_PUCK_R;
-        this.puck.vy = Math.abs(this.puck.vy) * 0.85;
+        this.puck.vy = Math.abs(this.puck.vy) * 0.92;
+        sound.thud(170);
       }
     }
 
@@ -3354,7 +3920,8 @@ export class FingerHockeyGame implements GameModule {
         return;
       } else {
         this.puck.y = h - FH_PUCK_R;
-        this.puck.vy = -Math.abs(this.puck.vy) * 0.85;
+        this.puck.vy = -Math.abs(this.puck.vy) * 0.92;
+        sound.thud(170);
       }
     }
 
@@ -3382,6 +3949,8 @@ export class FingerHockeyGame implements GameModule {
         gm: this.goalMessage,
         isSuper: this.isSuperHit,
         aiMood: this.aiMood,
+        pups: this.powerUps,
+        pEff: this.puckEffect,
         ts: Date.now()
       }
     });
@@ -3413,9 +3982,11 @@ export class FingerHockeyGame implements GameModule {
       this.goalMessage = s.gm;
       this.isSuperHit = s.isSuper;
       this.aiMood = s.aiMood || '🤖';
+      this.powerUps = s.pups || [];
+      this.puckEffect = s.pEff || 'none';
 
-      this.puckTrail.push({ x: this.puck.x, y: this.puck.y, isSuper: this.isSuperHit });
-      if (this.puckTrail.length > 8) this.puckTrail.shift();
+      this.puckTrail.push({ x: this.puck.x, y: this.puck.y, isSuper: this.isSuperHit, effect: this.puckEffect });
+      if (this.puckTrail.length > 9) this.puckTrail.shift();
     }
   };
 
@@ -3487,15 +4058,37 @@ export class FingerHockeyGame implements GameModule {
     this.drawMallet(c, this.p1Mallet.x, this.p1Mallet.y, '#74b9ff', 'P1 🔵');
     this.drawMallet(c, this.p2Mallet.x, this.p2Mallet.y, '#a29bfe', 'P2 🟣');
 
+    // Rink Power-ups
+    for (const pu of this.powerUps) {
+      c.save();
+      const pulseScale = 1 + Math.sin(Date.now() * 0.008 + pu.x) * 0.14;
+      c.translate(pu.x, pu.y);
+      c.scale(pulseScale, pulseScale);
+
+      c.beginPath();
+      c.arc(0, 0, 18, 0, Math.PI * 2);
+      c.fillStyle = pu.type === 'fire' ? 'rgba(235, 94, 40, 0.28)' : 'rgba(0, 206, 201, 0.28)';
+      c.fill();
+      c.strokeStyle = pu.type === 'fire' ? '#e17055' : '#00cec9';
+      c.lineWidth = 2.5;
+      c.stroke();
+
+      c.font = '16px serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(pu.type === 'fire' ? '🔥' : '❄️', 0, 1);
+      c.restore();
+    }
+
     // Puck Motion Trail
     for (let i = 0; i < this.puckTrail.length; i++) {
       const pt = this.puckTrail[i];
-      const alpha = (i + 1) / this.puckTrail.length * 0.45;
+      const alpha = ((i + 1) / this.puckTrail.length) * 0.48;
       c.save();
       c.globalAlpha = alpha;
       c.beginPath();
       c.arc(pt.x, pt.y, FH_PUCK_R * (0.5 + 0.5 * (i / this.puckTrail.length)), 0, Math.PI * 2);
-      c.fillStyle = pt.isSuper ? '#e17055' : 'rgba(45, 52, 54, 0.3)';
+      c.fillStyle = pt.effect === 'fire' ? '#e17055' : pt.effect === 'ice' ? '#74b9ff' : pt.isSuper ? '#fab1a0' : 'rgba(45, 52, 54, 0.3)';
       c.fill();
       c.restore();
     }
@@ -3504,36 +4097,61 @@ export class FingerHockeyGame implements GameModule {
     c.save();
     c.beginPath();
     c.arc(this.puck.x, this.puck.y, FH_PUCK_R, 0, Math.PI * 2);
-    c.fillStyle = this.isSuperHit ? '#d63031' : '#2d3436';
+    if (this.puckEffect === 'fire') {
+      c.fillStyle = '#d63031';
+      c.strokeStyle = '#f1c40f';
+      c.lineWidth = 4;
+    } else if (this.puckEffect === 'ice') {
+      c.fillStyle = '#00cec9';
+      c.strokeStyle = '#81ecec';
+      c.lineWidth = 3.5;
+    } else {
+      c.fillStyle = this.isSuperHit ? '#d63031' : '#2d3436';
+      c.strokeStyle = this.isSuperHit ? '#f1c40f' : '#636e72';
+      c.lineWidth = this.isSuperHit ? 3.5 : 2;
+    }
     c.fill();
-    c.strokeStyle = this.isSuperHit ? '#f1c40f' : '#636e72';
-    c.lineWidth = this.isSuperHit ? 3.5 : 2;
     c.stroke();
 
     // Puck highlight
     c.beginPath();
     c.arc(this.puck.x - 4, this.puck.y - 4, 4, 0, Math.PI * 2);
-    c.fillStyle = 'rgba(255,255,255,0.6)';
+    c.fillStyle = 'rgba(255,255,255,0.7)';
     c.fill();
 
-    if (this.isSuperHit) {
-      c.font = '14px serif';
+    if (this.puckEffect === 'fire' || this.isSuperHit) {
+      c.font = '15px serif';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
       c.fillText('🔥', this.puck.x, this.puck.y);
+    } else if (this.puckEffect === 'ice') {
+      c.font = '15px serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('❄️', this.puck.x, this.puck.y);
     }
     c.restore();
 
     // Particle explosions
     this.particles.updateAndDraw(c);
 
-    // Scoreboard
+    // Scoreboard & Power-up status
     c.font = `bold 22px 'Patrick Hand', cursive`;
     c.textAlign = 'left';
     c.fillStyle = '#2d3436';
     c.fillText(`👫 Humanos: ${this.scoreHumans}`, 14, h / 2 - 10);
     c.textAlign = 'right';
     c.fillText(`🤖 IA: ${this.scoreAI}`, w - 14, h / 2 + 24);
+
+    if (this.puckEffect !== 'none') {
+      c.save();
+      c.font = `bold 16px 'Patrick Hand', cursive`;
+      c.textAlign = 'center';
+      c.fillStyle = this.puckEffect === 'fire' ? '#d63031' : '#0984e3';
+      const label = this.puckEffect === 'fire' ? '🔥 ¡PUCK DE FUEGO VELOZ!' : '❄️ ¡PUCK DE HIELO SUPER DESLIZANTE!';
+      c.fillText(label, w / 2, h / 2 - 28);
+      c.restore();
+    }
 
     // Goal Flash Announcement
     if (this.goalFlashTimer > 0) {
@@ -3654,4 +4272,6 @@ export const GAME_MODULES: Record<string, () => GameModule> = {
   'star-fishing':      () => new StarFishingGame(),
   'inverse-gravity':   () => new InverseGravityGame(),
   'finger-hockey':     () => new FingerHockeyGame(),
+  'rhythm-duo':        () => new RhythmDuoGame(),
+  'laser-mirror':      () => new LaserMirrorGame(),
 };

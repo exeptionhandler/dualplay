@@ -29,8 +29,21 @@ export class Sync {
   }
 
   private connect(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve) => {
       if (this.isDestroyed) return resolve();
+
+      let settled = false;
+      const settle = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+
+      // Guard against hanging on slow or blocked network
+      const connTimeout = window.setTimeout(() => {
+        settle();
+      }, 3500);
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
@@ -39,11 +52,14 @@ export class Sync {
       try {
         this.ws = new WebSocket(wsUrl);
       } catch (err) {
+        clearTimeout(connTimeout);
         this.scheduleReconnect();
-        return reject(err);
+        settle();
+        return;
       }
 
       this.ws.onopen = () => {
+        clearTimeout(connTimeout);
         console.log('[Sync] Conectado al servidor relay');
         this.reconnectAttempt = 0;
         this.emit('connectionStatus', { status: 'connected' });
@@ -54,14 +70,18 @@ export class Sync {
           this.sendPresence(this.currentUserData);
         }
 
-        resolve();
+        settle();
       };
 
       this.ws.onerror = (err) => {
+        clearTimeout(connTimeout);
         console.warn('[Sync] Error en WebSocket:', err);
+        settle();
       };
 
       this.ws.onclose = () => {
+        clearTimeout(connTimeout);
+        settle();
         if (!this.isDestroyed) {
           console.log('[Sync] Conexión cerrada. Intentando reconexión...');
           this.emit('connectionStatus', { status: 'reconnecting' });
@@ -114,7 +134,9 @@ export class Sync {
     this.pingInterval = window.setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.lastPingSent = performance.now();
-        this.ws.send(JSON.stringify({ type: 'ping', ts: Date.now(), from: this.userId }));
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping', ts: Date.now(), from: this.userId }));
+        } catch (_) {}
       }
     }, 4000);
   }
@@ -126,11 +148,15 @@ export class Sync {
   sendPresence(user: any) {
     this.currentUserData = user;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'presence',
-        from: this.userId,
-        user: user
-      }));
+      try {
+        this.ws.send(JSON.stringify({
+          type: 'presence',
+          from: this.userId,
+          user: user
+        }));
+      } catch (e) {
+        console.warn('[Sync] Error enviando presencia:', e);
+      }
     }
   }
 
@@ -139,11 +165,15 @@ export class Sync {
 
     // Send to relay server
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'state',
-        from: this.userId,
-        state: partial,
-      }));
+      try {
+        this.ws.send(JSON.stringify({
+          type: 'state',
+          from: this.userId,
+          state: partial,
+        }));
+      } catch (e) {
+        console.warn('[Sync] Error enviando estado:', e);
+      }
     }
 
     // Also notify local listeners
@@ -159,7 +189,9 @@ export class Sync {
       xRatio
     };
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
+      try {
+        this.ws.send(JSON.stringify(payload));
+      } catch (_) {}
     }
     this.emit('reaction', payload);
   }
@@ -172,7 +204,9 @@ export class Sync {
       swapRoles,
     };
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
+      try {
+        this.ws.send(JSON.stringify(payload));
+      } catch (_) {}
     }
     this.emit('rematch', payload);
   }
@@ -185,7 +219,9 @@ export class Sync {
       y
     };
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
+      try {
+        this.ws.send(JSON.stringify(payload));
+      } catch (_) {}
     }
     this.emit('pingMarker', payload);
   }

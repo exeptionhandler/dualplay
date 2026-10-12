@@ -91,6 +91,20 @@ export const ALL_BADGES: Badge[] = [
     color: '#e17055',
   },
   {
+    id: 'rhythm-virtuoso',
+    icon: '🎵',
+    name: 'Armonía Perfecta',
+    desc: 'Alcanza un combo conjunto de x10 en Duelo Rítmico.',
+    color: '#e84393',
+  },
+  {
+    id: 'laser-optics',
+    icon: '🔦',
+    name: 'Maestros del Prisma',
+    desc: 'Completa los laberintos ópticos en Laberinto Láser.',
+    color: '#00b894',
+  },
+  {
     id: 'unbreakable-duo',
     icon: '💎',
     name: 'Dúo Imparable',

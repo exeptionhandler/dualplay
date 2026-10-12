@@ -7,6 +7,19 @@ import { ALL_BADGES, profileManager } from './badges';
 import { sound, haptic } from './audio';
 
 let toastContainer: HTMLElement | null = null;
+let activeResizeObserver: ResizeObserver | null = null;
+let activeResizeListener: (() => void) | null = null;
+
+export function cleanupGameView(): void {
+  if (activeResizeObserver) {
+    activeResizeObserver.disconnect();
+    activeResizeObserver = null;
+  }
+  if (activeResizeListener) {
+    window.removeEventListener('resize', activeResizeListener);
+    activeResizeListener = null;
+  }
+}
 
 export function showToast(text: string, duration = 2800): void {
   if (!toastContainer) {
@@ -83,6 +96,18 @@ export const GAMES: GameEntry[] = [
     tag: 'vs', tagLabel: 'vs IA',
     accentColor: '#d63031',
   },
+  {
+    id: 'rhythm-duo', emoji: '🎵', name: 'Duelo Rítmico',
+    desc: '2 carriles en sincronía sonora. ¡Acordes, chispas y combos!',
+    tag: 'coop', tagLabel: 'Co-op Rítmico',
+    accentColor: '#e84393',
+  },
+  {
+    id: 'laser-mirror', emoji: '🔦', name: 'Laberinto Láser',
+    desc: 'Uno orienta el rayo y el otro rota espejos. ¡Enciendan los cristales!',
+    tag: 'coop', tagLabel: 'Co-op Óptico',
+    accentColor: '#00b894',
+  },
 ];
 
 export interface LobbyCallbacks {
@@ -95,7 +120,34 @@ export interface LobbyCallbacks {
   onReaction?: (emoji: string) => void;
 }
 
+let activePartnerState: any = null;
+
+export function updateGamePartner(partner?: any): void {
+  activePartnerState = partner;
+  const statusEl = document.getElementById('hud-partner-status');
+  if (!statusEl) return;
+  if (partner) {
+    statusEl.className = 'hud-partner-status is-connected';
+    statusEl.title = `Compañero: ${partner.username}`;
+    const avatarIcon = partner.isBot ? '🤖' : (partner.avatarIcon || '👤');
+    statusEl.innerHTML = `
+      <span class="hud-status-dot online"></span>
+      <span class="hud-partner-avatar">${avatarIcon}</span>
+      <span class="hud-partner-name">${partner.username}</span>
+    `;
+  } else {
+    statusEl.className = 'hud-partner-status is-waiting';
+    statusEl.title = 'Esperando a un segundo jugador';
+    statusEl.innerHTML = `
+      <span class="hud-status-dot pulse"></span>
+      <span class="hud-partner-avatar">⏳</span>
+      <span class="hud-partner-name">Esperando 2P...</span>
+    `;
+  }
+}
+
 export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
+  cleanupGameView();
   const tagClass = (t: GameEntry['tag']) => 'game-tag tag-' + t;
   const profile = profileManager.getProfile();
   const inviteType = cbs.inviteType ?? 'link';
@@ -104,14 +156,14 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
     if (inviteType === 'none') return '';
     if (inviteType === 'discord') {
       return `
-        <button class="btn-icon-doodle btn-discord-invite" id="btn-invite" title="Invitar amigos de Discord">
+        <button class="btn-toolbar-doodle btn-discord-invite" id="btn-invite" title="Invitar amigos de Discord" aria-label="Invitar amigos de Discord">
           <span class="btn-icon">👥</span>
           <span class="btn-label">Invitar</span>
         </button>
       `;
     }
     return `
-      <button class="btn-icon-doodle" id="btn-invite" title="Invitar a un amigo con link">
+      <button class="btn-toolbar-doodle btn-link-invite" id="btn-invite" title="Copiar enlace de sala para un amigo" aria-label="Copiar enlace de invitación">
         <span class="btn-icon">🔗</span>
         <span class="btn-label">Invitar</span>
       </button>
@@ -123,7 +175,10 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
       return `<img src="https://cdn.discordapp.com/avatars/${p.id}/${p.avatar}.png" alt="${p.username}" />`;
     }
     const icon = p.avatarIcon || (p.isBot ? '🤖' : '🐱');
-    return `<div class="avatar-icon-fallback">${icon}</div>`;
+    const bgColors = ['#ffeaa7', '#a8e6cf', '#ffd3b6', '#dcedc1', '#a29bfe', '#74b9ff'];
+    const charSum = (p.username || 'A').split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0);
+    const bg = bgColors[charSum % bgColors.length];
+    return `<div class="avatar-icon-fallback" style="background:${bg};">${icon}</div>`;
   };
 
   const getBadgesHtml = (p: any) => {
@@ -140,6 +195,11 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
     `;
   };
 
+  const allCount = GAMES.length;
+  const coopCount = GAMES.filter(g => g.tag === 'coop').length;
+  const asyncCount = GAMES.filter(g => g.tag === 'async').length;
+  const vsCount = GAMES.filter(g => g.tag === 'vs').length;
+
   setView(`
     <div class="view" id="screen-lobby">
       <!-- Unified Header Strip -->
@@ -151,36 +211,42 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
           </div>
           <div class="session-streak-badge" title="Racha de victorias consecutivas de la sesión">
             <span class="streak-flame">🔥</span>
-            <span>Racha: <strong>${profile.sessionStreak}</strong></span>
+            <span class="streak-label">Racha:</span>
+            <strong class="streak-count">${profile.sessionStreak}</strong>
           </div>
         </div>
 
-        <div class="header-actions-group">
-          <button class="btn-icon-doodle" id="btn-sound-toggle" title="Alternar Sonido">
+        <!-- Central Unified Action Bar -->
+        <div class="header-control-bar" role="toolbar" aria-label="Herramientas del juego">
+          <button class="btn-toolbar-doodle btn-sound-toggle" id="btn-sound-toggle" title="${sound.getMuted() ? 'Activar sonido' : 'Silenciar sonido'}" aria-label="Alternar sonido">
             <span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>
           </button>
-          <button class="btn-icon-doodle btn-profile-action" id="btn-profile-open" title="Personalizar Perfil y Medallas">
+          <button class="btn-toolbar-doodle btn-profile-action" id="btn-profile-open" title="Personalizar Perfil y Medallas" aria-label="Abrir perfil">
             <span class="btn-icon">🎖️</span>
             <span class="btn-label">Perfil</span>
-            <span class="badge-count-bubble">${profile.equippedBadgeIds.length}/3</span>
+            <span class="badge-count-bubble" title="${profile.equippedBadgeIds.length} de 3 medallas equipadas">${profile.equippedBadgeIds.length}/3</span>
           </button>
           ${getInviteButtonHtml()}
           ${participants.length < 2 ? `
-            <button class="btn-icon-doodle btn-bot-action" id="btn-add-bot" title="Invocar a DuoBot para jugar juntos">
+            <button class="btn-toolbar-doodle btn-bot-action" id="btn-add-bot" title="Invocar a DuoBot para jugar juntos" aria-label="Invocar a DuoBot">
               <span class="btn-icon">🤖</span>
-              <span class="btn-label">DuoBot</span>
+              <span class="btn-label">+ DuoBot</span>
             </button>
           ` : ''}
         </div>
 
-        <!-- Connected Players Roster -->
+        <!-- Connected Players Roster Desk -->
         <div class="header-roster-group">
-          <div class="roster-card">
-            <div class="roster-heading">JUGADORES EN SALA</div>
+          <div class="roster-desk-card">
+            <div class="roster-desk-header">
+              <span class="roster-pin-icon">📌</span>
+              <span class="roster-heading">JUGADORES EN SALA</span>
+              <span class="roster-count-pill">${participants.length}/2</span>
+            </div>
             <div class="roster-members">
               ${participants.map((p, i) => `
-                <div class="roster-player" title="${p.username}">
-                  <div class="player-avatar-wrap" style="--rot: ${i % 2 === 0 ? 2 : -2};">
+                <div class="roster-player ${p.isBot ? 'is-bot' : ''}" title="${p.username}">
+                  <div class="player-avatar-wrap" style="--rot: ${i % 2 === 0 ? -2 : 2};">
                     ${p.accessory ? `<span class="player-accessory-badge">${p.accessory}</span>` : ''}
                     ${getAvatarDisplay(p)}
                   </div>
@@ -189,33 +255,66 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
                     ${getBadgesHtml(p)}
                   </div>
                 </div>
-              `).join('<span class="roster-connector">&</span>')}
+              `).join('<span class="roster-connector" aria-hidden="true">&</span>')}
               ${participants.length === 1 ? `
-                <div class="roster-player empty-slot" id="slot-add-bot" title="Toca aquí para jugar con DuoBot">
+                <button class="roster-player empty-slot" id="slot-add-bot" title="¿Jugar solo? Toca para invocar a DuoBot 🤖" aria-label="Invocar a DuoBot">
                   <div class="player-avatar-wrap dashed-slot">
-                    <span>+</span>
+                    <span class="dashed-plus">+</span>
                   </div>
                   <div class="roster-player-meta">
                     <span class="roster-player-name text-muted">¿Jugar solo?</span>
                     <span class="bot-summon-hint">Toca para bot 🤖</span>
                   </div>
-                </div>
+                </button>
               ` : ''}
             </div>
           </div>
         </div>
       </header>
 
-      <!-- Main Game Catalog (Responsive 2-column Grid) -->
+      <!-- Main Game Catalog -->
       <main class="lobby-content">
         <div class="lobby-headline-card">
           <h2 class="lobby-title">Elige un minijuego cooperativo</h2>
           <p class="lobby-subtitle">Jueguen en tiempo real con su compañero en la misma pantalla</p>
         </div>
 
+        <!-- Interactive Category Filters Bar & Quick Play -->
+        <div class="lobby-filter-container">
+          <div class="lobby-filter-tabs" role="tablist" aria-label="Categorías de minijuegos">
+            <button class="filter-tab-doodle active" data-filter="all" role="tab" aria-selected="true">
+              <span class="filter-icon">⭐</span>
+              <span class="filter-label">Todos</span>
+              <span class="filter-count">(${allCount})</span>
+            </button>
+            <button class="filter-tab-doodle" data-filter="coop" role="tab" aria-selected="false">
+              <span class="filter-icon">🤝</span>
+              <span class="filter-label">Cooperativos</span>
+              <span class="filter-count">(${coopCount})</span>
+            </button>
+            <button class="filter-tab-doodle" data-filter="async" role="tab" aria-selected="false">
+              <span class="filter-icon">⚡</span>
+              <span class="filter-label">Asimétricos</span>
+              <span class="filter-count">(${asyncCount})</span>
+            </button>
+            <button class="filter-tab-doodle" data-filter="vs" role="tab" aria-selected="false">
+              <span class="filter-icon">⚔️</span>
+              <span class="filter-label">vs IA</span>
+              <span class="filter-count">(${vsCount})</span>
+            </button>
+          </div>
+
+          <button class="btn-quick-play-doodle" id="btn-quick-play" title="Elegir y abrir un juego al azar de inmediato">
+            <span class="quick-play-dice">🎲</span>
+            <span class="quick-play-label">Juego Aleatorio</span>
+            <span class="quick-play-sparkle">✨</span>
+          </button>
+        </div>
+
         <div class="games-grid">
-          ${GAMES.map(g => `
-            <div class="game-card" data-game="${g.id}" style="--game-accent: ${g.accentColor};" tabindex="0" role="button">
+          ${GAMES.map((g, idx) => `
+            <div class="game-card" data-game="${g.id}" data-tag="${g.tag}" style="--game-accent: ${g.accentColor}; --tilt: ${idx % 2 === 0 ? '-1' : '1'};" tabindex="0" role="button" aria-label="Jugar ${g.name}">
+              <div class="game-card-tape" aria-hidden="true"></div>
               <div class="game-card-top">
                 <div class="game-sticker-frame">
                   <span class="game-emoji">${g.emoji}</span>
@@ -232,7 +331,10 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
               </div>
 
               <div class="game-card-bottom">
-                <span class="game-play-btn">¡Jugar juntos! ✏️</span>
+                <span class="game-play-btn">
+                  <span class="pencil-icon">✏️</span>
+                  <span>¡Jugar juntos!</span>
+                </span>
               </div>
             </div>
           `).join('')}
@@ -240,6 +342,57 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
       </main>
     </div>
   `);
+
+  // Filter tabs logic
+  const filterTabs = document.querySelectorAll('.filter-tab-doodle');
+  filterTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      sound.click();
+      haptic(15);
+      filterTabs.forEach(t => {
+        t.classList.remove('active');
+        t.setAttribute('aria-selected', 'false');
+      });
+      tab.classList.add('active');
+      tab.setAttribute('aria-selected', 'true');
+
+      const filter = tab.getAttribute('data-filter');
+      document.querySelectorAll('.game-card').forEach(card => {
+        const cardTag = card.getAttribute('data-tag');
+        if (filter === 'all' || cardTag === filter) {
+          card.classList.remove('is-hidden');
+          card.classList.add('is-entering');
+          setTimeout(() => card.classList.remove('is-entering'), 280);
+        } else {
+          card.classList.add('is-hidden');
+        }
+      });
+    });
+  });
+
+  // Quick Play Random Game button
+  document.getElementById('btn-quick-play')?.addEventListener('click', () => {
+    sound.star();
+    haptic(30);
+
+    const activeTab = document.querySelector('.filter-tab-doodle.active');
+    const currentCategory = activeTab?.getAttribute('data-filter') || 'all';
+    const eligibleGames = currentCategory === 'all'
+      ? GAMES
+      : GAMES.filter(g => g.tag === currentCategory);
+
+    const pool = eligibleGames.length > 0 ? eligibleGames : GAMES;
+    const randomGame = pool[Math.floor(Math.random() * pool.length)];
+
+    const dice = document.querySelector('.quick-play-dice');
+    dice?.classList.add('roll-dice');
+
+    showToast(`🎲 ¡Partida Aleatoria: ${randomGame.name}! ✨`);
+
+    setTimeout(() => {
+      cbs.onGameSelect(randomGame.id);
+    }, 220);
+  });
 
   // Game selection
   document.querySelectorAll('.game-card').forEach(card => {
@@ -259,7 +412,10 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
   document.getElementById('btn-sound-toggle')?.addEventListener('click', () => {
     sound.setMuted(!sound.getMuted());
     const btn = document.getElementById('btn-sound-toggle');
-    if (btn) btn.innerHTML = `<span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>`;
+    if (btn) {
+      btn.innerHTML = `<span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>`;
+      btn.title = sound.getMuted() ? 'Activar sonido' : 'Silenciar sonido';
+    }
     sound.click();
   });
 
@@ -300,50 +456,110 @@ export interface GameViewCallbacks {
   onReaction?: (emoji: string) => void;
 }
 
-export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCanvasElement {
+export function renderGameView(game: GameEntry, cbs: GameViewCallbacks, partner?: any): HTMLCanvasElement {
+  activePartnerState = partner;
+
   setView(`
     <div class="view game-view" id="screen-game">
+      <!-- Game Topbar HUD -->
       <div class="game-topbar">
-        <button class="btn btn-secondary btn-back" id="btn-back-lobby">← Volver</button>
-        <div class="game-topbar-title">${game.emoji} ${game.name}</div>
-        <div style="display:flex;align-items:center;gap:6px">
-          <button class="btn-icon-doodle" id="btn-game-sound" style="padding:4px 8px;font-size:1rem;">
-            ${sound.getMuted() ? '🔇' : '🔊'}
-          </button>
+        <button class="btn-icon-doodle btn-back-lobby" id="btn-back-lobby" title="Volver al lobby">
+          <span class="back-arrow">←</span>
+          <span class="back-label">Lobby</span>
+        </button>
+
+        <div class="game-topbar-center">
+          <div class="game-topbar-title-wrap">
+            <span class="game-topbar-emoji">${game.emoji}</span>
+            <span class="game-topbar-name">${game.name}</span>
+          </div>
+          <span class="game-tag tag-${game.tag} game-topbar-tag">${game.tagLabel}</span>
         </div>
-      </div>
-      <div class="game-canvas-area" id="canvas-area">
-        <canvas id="game-canvas"></canvas>
-        <div id="game-waiting-overlay" class="waiting-overlay hidden">
-          <div class="spinner"></div>
-          <div>Esperando al Jugador 2...</div>
-          <button class="btn btn-secondary" id="btn-overlay-play-bot" style="margin-top:12px;font-size:1.1rem;">
-            🤖 Jugar con DuoBot
+
+        <div class="game-topbar-right">
+          <div class="hud-partner-status ${partner ? 'is-connected' : 'is-waiting'}" id="hud-partner-status" title="${partner ? `Compañero: ${partner.username}` : 'Esperando a un segundo jugador'}">
+            <span class="hud-status-dot ${partner ? 'online' : 'pulse'}"></span>
+            <span class="hud-partner-avatar">${partner?.isBot ? '🤖' : (partner?.avatarIcon || '👤')}</span>
+            <span class="hud-partner-name">${partner ? partner.username : 'Esperando 2P...'}</span>
+          </div>
+
+          <button class="btn-icon-doodle btn-sound-game" id="btn-game-sound" title="${sound.getMuted() ? 'Activar sonido' : 'Silenciar sonido'}">
+            <span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>
           </button>
         </div>
       </div>
 
-      <!-- Floating Reaction Dock -->
-      <div class="reaction-dock" id="reaction-dock">
-        <button class="reaction-btn" data-emoji="👏" title="Aplauso">👏</button>
-        <button class="reaction-btn" data-emoji="😂" title="Risa">😂</button>
-        <button class="reaction-btn" data-emoji="🔥" title="Fuego">🔥</button>
-        <button class="reaction-btn" data-emoji="😱" title="Pánico">😱</button>
-        <button class="reaction-btn" data-emoji="❤️" title="Amor">❤️</button>
-        <button class="reaction-btn" data-emoji="👑" title="Corona">👑</button>
+      <!-- Canvas Play Area with Doodle Waiting Overlay -->
+      <div class="game-canvas-area" id="canvas-area">
+        <canvas id="game-canvas"></canvas>
+        <div id="game-waiting-overlay" class="waiting-overlay hidden">
+          <div class="waiting-card-doodle">
+            <div class="waiting-mascot-wrap">
+              <div class="waiting-doodle-icon">⏳</div>
+              <div class="waiting-spinner-doodle"></div>
+            </div>
+            <div class="waiting-content">
+              <h3 class="waiting-title">¡Esperando al Jugador 2!</h3>
+              <p class="waiting-subtitle">Este minijuego se juega en pareja en tiempo real. ¡Invita a un amigo o juega ahora con DuoBot!</p>
+            </div>
+            <button class="btn btn-primary btn-overlay-bot" id="btn-overlay-play-bot">
+              <span class="btn-icon">🤖</span>
+              <span class="btn-label">¡Jugar ahora con DuoBot!</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Floating Reaction Dock with Keyboard Hotkey Badges -->
+      <div class="reaction-dock" id="reaction-dock" role="region" aria-label="Reacciones en tiempo real">
+        <button class="reaction-btn" data-emoji="👏" data-key="1" title="Aplauso (Tecla 1)">
+          <span class="reaction-key-badge">1</span>
+          <span class="reaction-emoji">👏</span>
+        </button>
+        <button class="reaction-btn" data-emoji="😂" data-key="2" title="Risa (Tecla 2)">
+          <span class="reaction-key-badge">2</span>
+          <span class="reaction-emoji">😂</span>
+        </button>
+        <button class="reaction-btn" data-emoji="🔥" data-key="3" title="Fuego (Tecla 3)">
+          <span class="reaction-key-badge">3</span>
+          <span class="reaction-emoji">🔥</span>
+        </button>
+        <button class="reaction-btn" data-emoji="😱" data-key="4" title="Pánico (Tecla 4)">
+          <span class="reaction-key-badge">4</span>
+          <span class="reaction-emoji">😱</span>
+        </button>
+        <button class="reaction-btn" data-emoji="❤️" data-key="5" title="Amor (Tecla 5)">
+          <span class="reaction-key-badge">5</span>
+          <span class="reaction-emoji">❤️</span>
+        </button>
+        <button class="reaction-btn" data-emoji="👑" data-key="6" title="Corona (Tecla 6)">
+          <span class="reaction-key-badge">6</span>
+          <span class="reaction-emoji">👑</span>
+        </button>
       </div>
     </div>
   `);
 
+  cleanupGameView();
   const area = document.getElementById('canvas-area')!;
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 
   const resize = () => {
+    if (!area || !canvas) return;
     canvas.width  = area.clientWidth - 24;
     canvas.height = area.clientHeight - 24;
   };
   resize();
-  window.addEventListener('resize', resize, { passive: true });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    activeResizeObserver = new ResizeObserver(() => {
+      resize();
+    });
+    activeResizeObserver.observe(area);
+  } else {
+    activeResizeListener = resize;
+    window.addEventListener('resize', activeResizeListener, { passive: true });
+  }
 
   document.getElementById('btn-back-lobby')!.addEventListener('click', () => {
     sound.click();
@@ -353,7 +569,11 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCan
   document.getElementById('btn-game-sound')?.addEventListener('click', () => {
     sound.setMuted(!sound.getMuted());
     const btn = document.getElementById('btn-game-sound');
-    if (btn) btn.textContent = sound.getMuted() ? '🔇' : '🔊';
+    if (btn) {
+      btn.innerHTML = `<span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>`;
+      btn.title = sound.getMuted() ? 'Activar sonido' : 'Silenciar sonido';
+    }
+    sound.click();
   });
 
   document.getElementById('btn-overlay-play-bot')?.addEventListener('click', () => {
@@ -366,6 +586,8 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks): HTMLCan
     btn.addEventListener('click', () => {
       const emoji = btn.getAttribute('data-emoji');
       if (emoji) {
+        btn.classList.add('spring-pop');
+        setTimeout(() => btn.classList.remove('spring-pop'), 400);
         sound.pop ? sound.boing(450) : sound.click();
         haptic(15);
         cbs.onReaction?.(emoji);
