@@ -37,6 +37,7 @@ export interface GameEntry {
   desc: string;
   tag: 'coop' | 'vs' | 'async';
   tagLabel: string;
+  accentColor: string;
 }
 
 export const GAMES: GameEntry[] = [
@@ -44,36 +45,43 @@ export const GAMES: GameEntry[] = [
     id: 'tetris-dual', emoji: '🧩', name: 'Tetris Dual',
     desc: 'Tablero compartido. ¡Coordínate para limpiar líneas!',
     tag: 'coop', tagLabel: 'Co-op',
+    accentColor: '#0984e3',
   },
   {
     id: 'balloon', emoji: '🎈', name: 'No dejes caer el globo',
-    desc: 'Gravedad real. Toca para impulsar. ¡Mantenlo en el aire!',
+    desc: 'Física cooperativa y combos. ¡Mantenlo en el aire!',
     tag: 'coop', tagLabel: 'Co-op',
+    accentColor: '#e17055',
   },
   {
     id: 'minesweeper', emoji: '💣', name: 'Buscaminas en Pareja',
-    desc: 'Revelan juntos, pierden juntos. ¡Cuidado!',
+    desc: 'Escudo cooperativo y acordes. ¡Despejen sin detonar!',
     tag: 'coop', tagLabel: 'Co-op',
+    accentColor: '#f39c12',
   },
   {
     id: 'crystal-bridge', emoji: '🌉', name: 'Puente de Cristal',
-    desc: 'Uno ve, el otro mueve. Asimetría pura.',
+    desc: 'Uno ve el camino, el otro salta. Señales y memoria.',
     tag: 'async', tagLabel: 'Asimétrico',
+    accentColor: '#00b894',
   },
   {
     id: 'star-fishing', emoji: '⭐', name: 'Pesca Estelar',
-    desc: 'Toca al mismo tiempo. ¡Sincronía perfecta!',
+    desc: 'Sincronía rítmica y estrellas doradas en 45 segundos.',
     tag: 'coop', tagLabel: 'Co-op',
+    accentColor: '#6c5ce7',
   },
   {
     id: 'inverse-gravity', emoji: '🚀', name: 'Gravedad Invertida',
-    desc: 'Avance automático sin parar con escudo cooperativo.',
+    desc: 'El piloto altera la gravedad, el copiloto dispara láser.',
     tag: 'coop', tagLabel: 'Co-op',
+    accentColor: '#00cec9',
   },
   {
     id: 'finger-hockey', emoji: '🏒', name: 'Hockey de Dedos',
-    desc: '2 humanos vs IA. Protege la portería.',
+    desc: '2 humanos vs IA con tiros de fuego y físicas elásticas.',
     tag: 'vs', tagLabel: 'vs IA',
+    accentColor: '#d63031',
   },
 ];
 
@@ -95,7 +103,7 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
       return `<img src="https://cdn.discordapp.com/avatars/${p.id}/${p.avatar}.png" alt="${p.username}" />`;
     }
     const icon = p.avatarIcon || (p.isBot ? '🤖' : '🐱');
-    return `<div style="font-size:32px;display:flex;align-items:center;justify-content:center;height:100%;width:100%;background:#dfe6e9;border-radius:50%">${icon}</div>`;
+    return `<div class="avatar-icon-fallback">${icon}</div>`;
   };
 
   const getBadgesHtml = (p: any) => {
@@ -113,66 +121,106 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
   };
 
   setView(`
-    <div class="view" id="screen-lobby" style="padding:0;justify-content:flex-start">
-      <!-- Top Action Bar -->
-      <div class="lobby-top-bar">
-        <div class="session-streak-badge" title="Racha de victorias consecutivas">
-          🔥 Racha: ${profile.sessionStreak}
+    <div class="view" id="screen-lobby">
+      <!-- Unified Header Strip -->
+      <header class="app-header">
+        <div class="header-brand-group">
+          <div class="brand-title-wrap">
+            <span class="brand-logo">DuoPlay</span>
+            <span class="brand-badge-pill">2P CO-OP</span>
+          </div>
+          <div class="session-streak-badge" title="Racha de victorias consecutivas de la sesión">
+            <span class="streak-flame">🔥</span>
+            <span>Racha: <strong>${profile.sessionStreak}</strong></span>
+          </div>
         </div>
-        <div class="lobby-actions">
+
+        <div class="header-actions-group">
           <button class="btn-icon-doodle" id="btn-sound-toggle" title="Alternar Sonido">
-            ${sound.getMuted() ? '🔇' : '🔊'}
+            <span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>
           </button>
-          <button class="btn-icon-doodle" id="btn-profile-open" title="Personalizar Perfil y Medallas">
-            🎖️ Perfil
+          <button class="btn-icon-doodle btn-profile-action" id="btn-profile-open" title="Personalizar Perfil y Medallas">
+            <span class="btn-icon">🎖️</span>
+            <span class="btn-label">Perfil</span>
+            <span class="badge-count-bubble">${profile.equippedBadgeIds.length}/3</span>
           </button>
-          <button class="btn-icon-doodle" id="btn-invite" title="Invitar a un amigo">
-            🔗 Invitar
+          <button class="btn-icon-doodle" id="btn-invite" title="Invitar a un amigo con link">
+            <span class="btn-icon">🔗</span>
+            <span class="btn-label">Invitar</span>
           </button>
           ${participants.length < 2 ? `
-            <button class="btn-icon-doodle" id="btn-add-bot" title="Jugar con DuoBot">
-              🤖 Bot
+            <button class="btn-icon-doodle btn-bot-action" id="btn-add-bot" title="Invocar a DuoBot para jugar juntos">
+              <span class="btn-icon">🤖</span>
+              <span class="btn-label">DuoBot</span>
             </button>
           ` : ''}
         </div>
-      </div>
 
-      <!-- Header with Avatars -->
-      <div class="lobby-header">
-        <div class="logo-title" style="font-size:2rem;margin-bottom:0">DuoPlay</div>
-        <div class="lobby-players">
-          ${participants.map((p, i) => `
-            <div style="display:flex;flex-direction:column;align-items:center">
-              <div class="player-avatar-wrap" style="--rot: ${i % 2 === 0 ? 3 : -4}; position:relative;" title="${p.username}">
-                ${p.accessory ? `<span style="position:absolute;top:-12px;right:-8px;font-size:22px;z-index:2;">${p.accessory}</span>` : ''}
-                ${getAvatarDisplay(p)}
-              </div>
-              <span style="font-size:0.9rem;font-weight:bold;margin-top:2px;">${p.username}</span>
-              ${getBadgesHtml(p)}
+        <!-- Connected Players Roster -->
+        <div class="header-roster-group">
+          <div class="roster-card">
+            <div class="roster-heading">JUGADORES EN SALA</div>
+            <div class="roster-members">
+              ${participants.map((p, i) => `
+                <div class="roster-player" title="${p.username}">
+                  <div class="player-avatar-wrap" style="--rot: ${i % 2 === 0 ? 2 : -2};">
+                    ${p.accessory ? `<span class="player-accessory-badge">${p.accessory}</span>` : ''}
+                    ${getAvatarDisplay(p)}
+                  </div>
+                  <div class="roster-player-meta">
+                    <span class="roster-player-name">${p.username}</span>
+                    ${getBadgesHtml(p)}
+                  </div>
+                </div>
+              `).join('<span class="roster-connector">&</span>')}
+              ${participants.length === 1 ? `
+                <div class="roster-player empty-slot" id="slot-add-bot" title="Toca aquí para jugar con DuoBot">
+                  <div class="player-avatar-wrap dashed-slot">
+                    <span>+</span>
+                  </div>
+                  <div class="roster-player-meta">
+                    <span class="roster-player-name text-muted">¿Jugar solo?</span>
+                    <span class="bot-summon-hint">Toca para bot 🤖</span>
+                  </div>
+                </div>
+              ` : ''}
             </div>
-          `).join('')}
+          </div>
         </div>
-      </div>
+      </header>
 
-      <!-- Game grid -->
-      <div class="lobby-content">
-        <div class="section-title">Elige un minijuego cooperativo:</div>
+      <!-- Main Game Catalog (Responsive 2-column Grid) -->
+      <main class="lobby-content">
+        <div class="lobby-headline-card">
+          <h2 class="lobby-title">Elige un minijuego cooperativo</h2>
+          <p class="lobby-subtitle">Jueguen en tiempo real con su compañero en la misma pantalla</p>
+        </div>
+
         <div class="games-grid">
           ${GAMES.map(g => `
-            <div class="game-card" data-game="${g.id}" tabindex="0" role="button">
-              <div class="game-emoji">${g.emoji}</div>
-              <div class="game-info">
-                <div class="game-name">
-                  ${g.name}
-                  ${cbs.hostLocation === g.id ? '<span class="host-star" title="Jugador 1 está aquí">⭐</span>' : ''}
+            <div class="game-card" data-game="${g.id}" style="--game-accent: ${g.accentColor};" tabindex="0" role="button">
+              <div class="game-card-top">
+                <div class="game-sticker-frame">
+                  <span class="game-emoji">${g.emoji}</span>
                 </div>
-                <div class="game-desc">${g.desc}</div>
+                <div class="game-badges-group">
+                  <span class="${tagClass(g.tag)}">${g.tagLabel}</span>
+                  ${cbs.hostLocation === g.id ? '<span class="host-star-badge" title="Jugador 1 está esperando aquí">⭐ Host aquí</span>' : ''}
+                </div>
               </div>
-              <div class="${tagClass(g.tag)}">${g.tagLabel}</div>
+
+              <div class="game-card-body">
+                <h3 class="game-name">${g.name}</h3>
+                <p class="game-desc">${g.desc}</p>
+              </div>
+
+              <div class="game-card-bottom">
+                <span class="game-play-btn">¡Jugar juntos! ✏️</span>
+              </div>
             </div>
           `).join('')}
         </div>
-      </div>
+      </main>
     </div>
   `);
 
@@ -194,7 +242,7 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
   document.getElementById('btn-sound-toggle')?.addEventListener('click', () => {
     sound.setMuted(!sound.getMuted());
     const btn = document.getElementById('btn-sound-toggle');
-    if (btn) btn.textContent = sound.getMuted() ? '🔇' : '🔊';
+    if (btn) btn.innerHTML = `<span class="btn-icon">${sound.getMuted() ? '🔇' : '🔊'}</span>`;
     sound.click();
   });
 
@@ -215,6 +263,12 @@ export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
 
   // Play with bot button
   document.getElementById('btn-add-bot')?.addEventListener('click', () => {
+    sound.click();
+    cbs.onPlayBot?.();
+  });
+
+  // Empty slot bot trigger
+  document.getElementById('slot-add-bot')?.addEventListener('click', () => {
     sound.click();
     cbs.onPlayBot?.();
   });
