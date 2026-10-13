@@ -23,6 +23,7 @@ let currentRoomId = 'global';
 let reactionCounter = 0;
 let discordSdkInstance: DiscordSDK | null = null;
 let isDiscordMode = false;
+let waitingBotTimer: number | null = null;
 
 // Deterministic Host Arbitrage (Prevents Split-Brain)
 function getIsHost(): boolean {
@@ -115,7 +116,7 @@ async function init() {
         equippedBadges: profile.equippedBadgeIds,
       };
 
-      currentRoomId = discordSdk.channelId || currentRoomId;
+      currentRoomId = discordSdk.channelId || discordSdk.instanceId || currentRoomId;
     } catch (e) {
       console.warn('Fallback a modo Web Standalone desde Discord:', e);
       discordSdkInstance = null;
@@ -196,6 +197,10 @@ function setupSyncListeners() {
       if (currentScreen === 'lobby') {
         goLobby();
       } else if (participants.length >= 2) {
+        if (waitingBotTimer) {
+          clearTimeout(waitingBotTimer);
+          waitingBotTimer = null;
+        }
         setWaitingOverlay(false);
         const partner = participants.find(p => p.id !== me?.id);
         updateGamePartner(partner);
@@ -234,6 +239,17 @@ function setupSyncListeners() {
   sync.on('reaction', (data: any) => {
     triggerFloatingReaction(data.emoji, data.xRatio);
   });
+
+  // Synchronized rematch across both devices
+  sync.on('rematch', (_data: any) => {
+    document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
+    if (currentScreen && currentScreen !== 'lobby') {
+      showToast('🔄 ¡Comenzando revancha en equipo! ✨');
+      sound.star();
+      haptic([30, 60]);
+      goGame(currentScreen as GameId);
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -241,6 +257,10 @@ function setupSyncListeners() {
 // ═══════════════════════════════════════════════════════
 
 function goLobby(): void {
+  if (waitingBotTimer) {
+    clearTimeout(waitingBotTimer);
+    waitingBotTimer = null;
+  }
   currentScreen = 'lobby';
   lastRenderedLobbyHostLocation = null;
   sound.startLobbyBgm();
@@ -299,7 +319,17 @@ function goGame(gameId: GameId): void {
     if (participants.length < 2) {
       setWaitingOverlay(true);
       gamePendingInit = { mod, canvas, isHost };
+      if (waitingBotTimer) clearTimeout(waitingBotTimer);
+      waitingBotTimer = window.setTimeout(() => {
+        if (participants.length < 2 && currentScreen !== 'lobby') {
+          showToast('💡 ¿Tu compañero tarda? ¡Toca "Jugar ahora con DuoBot" para comenzar!');
+        }
+      }, 7500);
     } else {
+      if (waitingBotTimer) {
+        clearTimeout(waitingBotTimer);
+        waitingBotTimer = null;
+      }
       setWaitingOverlay(false);
       mod.init({ canvas, sync, me, isHost, onLobby: () => goLobby() });
     }

@@ -400,8 +400,7 @@ export class RhythmDuoGame implements GameModule {
       title: won ? '¡Sinfonía Cooperativa! 🎵' : '¡Fin de la Melodía!',
       statsText: `Puntuación: ${this.score} · Combo Máximo: x${this.maxCombo}`,
       stars: this.maxCombo >= 15 ? 3 : (won ? 2 : 1),
-      newBadge,
-      onRematch: () => this.handleRestart(),
+      onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
       onLobby: () => {
         this.ctx.sync.setState({ host_location: null });
         this.ctx.onLobby?.();

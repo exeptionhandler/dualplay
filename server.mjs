@@ -91,24 +91,30 @@ const server = http.createServer((req, res) => {
   }
 });
 
-// ── WebSocket Relay Server ──
+// ── WebSocket Relay Server & Room State Store ──
 const wss = new WebSocketServer({ server });
-const channels = new Map(); // channelId -> Set of WebSockets
+const channels = new Map(); // roomId -> Set of WebSockets
+const roomStates = new Map(); // roomId -> last accumulated state
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
-  const channelId = url.searchParams.get('channelId') || 'global';
-  ws.channelId = channelId;
+  // Support both channelId and instanceId for complete multi-tenant isolation
+  const channelId = url.searchParams.get('channelId');
+  const instanceId = url.searchParams.get('instanceId');
+  const roomId = channelId || (instanceId ? `inst_${instanceId}` : 'global');
+
+  ws.roomId = roomId;
   ws.userId = null;
 
-  if (!channels.has(channelId)) {
-    channels.set(channelId, new Set());
+  if (!channels.has(roomId)) {
+    channels.set(roomId, new Set());
   }
-  channels.get(channelId).add(ws);
+  channels.get(roomId).add(ws);
 
   ws.on('message', (raw) => {
+    let data;
     try {
-      const data = JSON.parse(raw);
+      data = JSON.parse(raw);
       if (data.from && !ws.userId) {
         ws.userId = data.from;
       }
@@ -118,10 +124,29 @@ wss.on('connection', (ws, req) => {
         }
         return;
       }
+
+      // Handle full state request on reconnect
+      if (data.type === 'request_full_state') {
+        const cached = roomStates.get(roomId);
+        if (cached && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'state',
+            from: 'server_cache',
+            state: cached,
+            isSnapshot: true,
+          }));
+        }
+      }
+
+      // Cache state updates per room
+      if (data.type === 'state' && data.state) {
+        const current = roomStates.get(roomId) || {};
+        roomStates.set(roomId, Object.assign(current, data.state));
+      }
     } catch (_) {}
 
-    // Relay to all OTHER clients in the same channel
-    const clients = channels.get(channelId);
+    // Relay to all OTHER clients in the same room
+    const clients = channels.get(roomId);
     if (clients) {
       clients.forEach(client => {
         if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -132,7 +157,7 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    const clients = channels.get(channelId);
+    const clients = channels.get(roomId);
     if (clients) {
       clients.delete(ws);
       if (ws.userId) {
@@ -147,7 +172,15 @@ wss.on('connection', (ws, req) => {
           }
         });
       }
-      if (clients.size === 0) channels.delete(channelId);
+      if (clients.size === 0) {
+        channels.delete(roomId);
+        // Clean room state after 15 minutes of emptiness
+        setTimeout(() => {
+          if (!channels.has(roomId)) {
+            roomStates.delete(roomId);
+          }
+        }, 15 * 60 * 1000);
+      }
     }
   });
 });

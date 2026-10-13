@@ -347,14 +347,7 @@ export class LaserMirrorGame implements GameModule {
       statsText: `Completaron todos los niveles con éxito.`,
       stars: 3,
       newBadge: badge || undefined,
-      canSwapRoles: true,
-      onRematch: (swap) => {
-        if (swap) {
-          this.ctx.isHost = !this.ctx.isHost;
-          showToast(this.ctx.isHost ? '🔦 Ahora manejas el Emisor Láser' : '🪞 Ahora rotas los Espejos');
-        }
-        this.handleRestart();
-      },
+      onRematch: (swap) => this.ctx.sync.sendRematch(this.ctx.me.id, swap),
       onLobby: () => {
         this.ctx.sync.setState({ host_location: null });
         this.ctx.onLobby?.();

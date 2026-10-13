@@ -697,12 +697,28 @@ class SoundEngine {
 
 export const sound = new SoundEngine();
 
-/** Feedback háptico seguro para móviles */
+/** Feedback háptico seguro para móviles y micro-shake visual para iOS/Web */
 export function haptic(pattern: number | number[] = 25) {
+  let didVibrate = false;
   if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     try {
-      navigator.vibrate(pattern);
+      didVibrate = navigator.vibrate(pattern);
     } catch (_) {}
+  }
+
+  // Si es iOS/Safari donde navigator.vibrate no está soportado o falló, dar feedback visual sutil
+  if (!didVibrate && typeof document !== 'undefined') {
+    const isStrong = Array.isArray(pattern) ? (pattern[0] || 0) >= 40 : pattern >= 30;
+    const app = document.getElementById('app');
+    if (app) {
+      const cls = isStrong ? 'screen-shake-light' : 'screen-shake-subtle';
+      app.classList.remove('screen-shake-light', 'screen-shake-subtle');
+      void app.offsetWidth; // Forzar reflow para reiniciar animación
+      app.classList.add(cls);
+      setTimeout(() => {
+        app.classList.remove(cls);
+      }, 240);
+    }
   }
 }
 

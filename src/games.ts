@@ -268,7 +268,7 @@ export class TetrisDual implements GameModule {
       statsText: `Líneas cooperativas: ${this.totalLines} / 8 completadas`,
       stars: 3,
       newBadge: badge || undefined,
-      onRematch: () => this.restartGame(),
+      onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
       onLobby: () => this.ctx.sync.setState({ host_location: null }),
     });
   }
@@ -290,7 +290,7 @@ export class TetrisDual implements GameModule {
       title: '¡El tablero llegó al tope! 💥',
       statsText: `Líneas cooperativas logradas: ${this.totalLines} / 8 meta`,
       stars: this.totalLines >= 4 ? 2 : 1,
-      onRematch: () => this.restartGame(),
+      onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
       onLobby: () => this.ctx.sync.setState({ host_location: null }),
     });
   }
@@ -349,8 +349,11 @@ export class TetrisDual implements GameModule {
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
 
+    // Generous touch hitbox padding for comfortable finger tapping on mobile
+    const padX = 0.015;
+    const padY = 0.035;
     for (const b of this.buttons) {
-      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      if (x >= (b.x - padX) && x <= (b.x + b.w + padX) && y >= (b.y - padY) && y <= (b.y + b.h + padY)) {
         this.sendInput(b.id);
         break;
       }
@@ -475,7 +478,7 @@ export class TetrisDual implements GameModule {
           statsText: `Líneas cooperativas: ${this.totalLines} / 8 completadas`,
           stars: 3,
           newBadge: badge || undefined,
-          onRematch: () => this.restartGame(),
+          onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
           onLobby: () => {
             this.ctx.sync.setState({ host_location: null });
             this.ctx.onLobby?.();
@@ -489,7 +492,7 @@ export class TetrisDual implements GameModule {
           title: '¡El tablero llegó al tope! 💥',
           statsText: `Líneas cooperativas logradas: ${this.totalLines} / 8 meta`,
           stars: this.totalLines >= 4 ? 2 : 1,
-          onRematch: () => this.restartGame(),
+          onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
           onLobby: () => {
             this.ctx.sync.setState({ host_location: null });
             this.ctx.onLobby?.();
@@ -910,13 +913,7 @@ export class BalloonGame implements GameModule {
       statsText: `Toques en equipo: ${this.score} · Tiempo: ${seconds}s`,
       stars: won ? (seconds >= 45 ? 3 : 2) : 1,
       newBadge,
-      onRematch: () => {
-        this.restart();
-        if (this.ctx.isHost) {
-          this.startSyncLoop();
-          this.ctx.sync.setState({ balloonState: { over: false, score: 0, ts: Date.now() } });
-        }
-      },
+      onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
       onLobby: () => {
         this.ctx.sync.setState({ balloonState: null, host_location: null });
         this.ctx.onLobby?.();
@@ -1347,7 +1344,7 @@ export class MinesweeperGame implements GameModule {
         title: '¡BOOM! Mina activada 💥',
         statsText: '¡Trabajen en equipo para la próxima!',
         stars: 1,
-        onRematch: () => this.handleRestart(),
+        onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
         onLobby: () => {
           this.ctx.sync.setState({ host_location: null });
           this.ctx.onLobby?.();
@@ -1536,7 +1533,7 @@ export class MinesweeperGame implements GameModule {
           statsText: '¡Desactivaron todas las minas en pareja!',
           stars: 3,
           newBadge: badge || undefined,
-          onRematch: () => this.handleRestart(),
+          onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
           onLobby: () => {
             this.ctx.sync.setState({ host_location: null });
             this.ctx.onLobby?.();
@@ -2031,7 +2028,7 @@ export class CrystalBridgeGame implements GameModule {
         stars: this.lives >= 3 ? 3 : 2,
         newBadge: badge || undefined,
         canSwapRoles: true,
-        onRematch: (swap) => this.handleRestart(swap),
+        onRematch: (swap) => this.ctx.sync.sendRematch(this.ctx.me.id, swap),
         onLobby: () => {
           this.ctx.sync.setState({ host_location: null });
           this.ctx.onLobby?.();
@@ -2071,7 +2068,7 @@ export class CrystalBridgeGame implements GameModule {
           statsText: `Llegaron a la baldosa ${this.avatarRow + 1} de ${CB_ROWS}`,
           stars: 1,
           canSwapRoles: true,
-          onRematch: (swap) => this.handleRestart(swap),
+          onRematch: (swap) => this.ctx.sync.sendRematch(this.ctx.me.id, swap),
           onLobby: () => {
             this.ctx.sync.setState({ host_location: null });
             this.ctx.onLobby?.();
@@ -2662,7 +2659,7 @@ export class StarFishingGame implements GameModule {
       statsText: `Estrellas pescadas: ${this.score} ${this.won ? '(¡Meta de 15 superada!)' : '(Meta: 15)'}`,
       stars: this.score >= 25 ? 3 : (this.won ? 2 : 1),
       newBadge,
-      onRematch: () => this.handleRestart(),
+      onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
       onLobby: () => {
         this.ctx.sync.setState({ host_location: null });
         this.ctx.onLobby?.();
@@ -3449,7 +3446,7 @@ export class InverseGravityGame implements GameModule {
               stars: distInt >= 500 ? 3 : (won ? 2 : 1),
               newBadge,
               canSwapRoles: true,
-              onRematch: (swap) => this.handleRestart(swap),
+              onRematch: (swap) => this.ctx.sync.sendRematch(this.ctx.me.id, swap),
               onLobby: () => {
                 this.ctx.sync.setState({ host_location: null });
                 this.ctx.onLobby?.();
@@ -4383,7 +4380,7 @@ export class FingerHockeyGame implements GameModule {
           statsText: `Marcador Final: Humanos ${this.scoreHumans} - ${this.scoreAI} IA`,
           stars: humansWon ? (this.scoreAI === 0 ? 3 : 2) : 1,
           newBadge,
-          onRematch: () => this.handleRestart(),
+          onRematch: () => this.ctx.sync.sendRematch(this.ctx.me.id),
           onLobby: () => {
             this.ctx.sync.setState({ host_location: null });
             this.ctx.onLobby?.();

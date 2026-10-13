@@ -61,6 +61,7 @@ export class Sync {
       this.ws.onopen = () => {
         clearTimeout(connTimeout);
         console.log('[Sync] Conectado al servidor relay');
+        const wasReconnect = this.reconnectAttempt > 0;
         this.reconnectAttempt = 0;
         this.emit('connectionStatus', { status: 'connected' });
         this.startPingLoop();
@@ -68,6 +69,13 @@ export class Sync {
         // Resend presence on reconnect
         if (this.currentUserData) {
           this.sendPresence(this.currentUserData);
+        }
+
+        // If reconnecting, request latest game state snapshot from room cache/host
+        if (wasReconnect) {
+          try {
+            this.ws?.send(JSON.stringify({ type: 'request_full_state', from: this.userId }));
+          } catch (_) {}
         }
 
         settle();
@@ -224,6 +232,17 @@ export class Sync {
       } catch (_) {}
     }
     this.emit('pingMarker', payload);
+  }
+
+  requestFullState() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try {
+        this.ws.send(JSON.stringify({
+          type: 'request_full_state',
+          from: this.userId,
+        }));
+      } catch (_) {}
+    }
   }
 
   getState(): Record<string, any> {
