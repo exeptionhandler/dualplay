@@ -88,25 +88,31 @@ export class DuoBot {
 
     // 1. Star Fishing Co-Tapping (captura sincronizada)
     if (state.sfTap && state.sfTap.by !== DUOBOT_USER.id) {
-      const starId = state.sfTap.starId;
+      const starId = state.sfTap.id || state.sfTap.starId;
       // React with human-like delay (120ms - 210ms)
       const delay = 120 + Math.random() * 90;
       const t = window.setTimeout(() => {
         this.pendingTimeouts.delete(t);
         if (!this.active) return;
         this.sync.setState({
-          sfTap: { starId, ts: Date.now(), by: DUOBOT_USER.id }
+          sfTap: { id: starId, starId, ts: Date.now(), by: DUOBOT_USER.id }
         });
       }, delay);
       this.pendingTimeouts.add(t);
     }
 
-    // 2. Inverse Gravity Shield
+    // 2. Inverse Gravity Shield & Zap
     if (state.igState && state.igState.obs && Array.isArray(state.igState.obs)) {
       const danger = state.igState.obs.some((o: any) => o.x > 80 && o.x < 190);
       if (danger && !state.igShieldActive) {
         this.sync.setState({
           igShield: { active: true, by: DUOBOT_USER.id, ts: Date.now() }
+        });
+      }
+      const closeObs = state.igState.obs.find((o: any) => o.x > 60 && o.x < 220);
+      if (closeObs && Math.random() < 0.35) {
+        this.sync.setState({
+          igZap: { id: closeObs.id, x: closeObs.x, y: closeObs.y, ts: Date.now(), by: DUOBOT_USER.id }
         });
       }
     }
@@ -133,22 +139,20 @@ export class DuoBot {
 
     const state = this.sync.getState();
 
-    // 4. Tetris Dual P2 autonomous movements (every ~400ms = 5 ticks)
-    if (this.currentScreen === 'tetris-dual' && this.tickCount % 5 === 0) {
+    // 4. Tetris Dual P2 autonomous movements (every ~240ms = 3 ticks)
+    if (this.currentScreen === 'tetris-dual' && this.tickCount % 3 === 0) {
       const moves = ['left', 'right', 'rot', 'drop'];
-      const action = moves[Math.floor(Math.random() * moves.length)];
-      if (Math.random() < 0.65) {
-        this.sync.setState({
-          tInput: { by: DUOBOT_USER.id, action, ts: Date.now() }
-        });
-      }
+      const action = Math.random() < 0.18 ? 'rot' : moves[Math.floor(Math.random() * moves.length)];
+      this.sync.setState({
+        tInput: { by: DUOBOT_USER.id, act: action, action, ts: Date.now() }
+      });
     }
 
     // 5. Crystal Bridge: Step forward periodically (every ~640ms = 8 ticks)
     if (this.currentScreen === 'crystal-bridge' && this.tickCount % 8 === 0) {
       if (state.cbState && state.cbState.step !== undefined) {
-        if (Math.random() < 0.4 && !state.cbState.gameOver && !state.cbState.won) {
-          const side = Math.random() > 0.5 ? 0 : 1;
+        if (Math.random() < 0.5 && !state.cbState.gameOver && !state.cbState.won) {
+          const side: 'left' | 'right' = Math.random() > 0.5 ? 'left' : 'right';
           this.sync.setState({
             cbStep: { side, by: DUOBOT_USER.id, ts: Date.now() }
           });

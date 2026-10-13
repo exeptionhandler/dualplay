@@ -27,8 +27,10 @@ let isDiscordMode = false;
 // Deterministic Host Arbitrage (Prevents Split-Brain)
 function getIsHost(): boolean {
   if (participants.length === 0) return true;
-  // Sort deterministically by id
-  const sorted = [...participants].sort((a, b) => a.id.localeCompare(b.id));
+  // DuoBot is a client-side simulated companion, NOT a network host client!
+  const humans = participants.filter(p => !p.isBot && p.id !== DUOBOT_USER.id);
+  if (humans.length <= 1) return true;
+  const sorted = [...humans].sort((a, b) => a.id.localeCompare(b.id));
   return sorted[0]?.id === me.id;
 }
 
@@ -223,7 +225,12 @@ function setupSyncListeners() {
 
 function goLobby(): void {
   currentScreen = 'lobby';
-  duoBot.stop();
+  const hasBot = participants.some(p => p.id === DUOBOT_USER.id);
+  if (hasBot) {
+    duoBot.start('lobby');
+  } else {
+    duoBot.stop();
+  }
   cleanupGameView();
   document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
 
@@ -277,6 +284,12 @@ function goGame(gameId: GameId): void {
       setWaitingOverlay(false);
       mod.init({ canvas, sync, me, isHost });
     }
+
+    const hasBot = participants.some(p => p.id === DUOBOT_USER.id);
+    if (hasBot) {
+      duoBot.start(gameId);
+    }
+
     showToast(`${entry.emoji} ${entry.name}`);
   }
 }

@@ -665,7 +665,7 @@ export class LaserMirrorGame implements GameModule {
 
     // Cañón del láser
     c.fillStyle = '#0984e3';
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 3;
     c.beginPath();
     c.roundRect(0, -12, 36, 24, 6);
@@ -704,7 +704,7 @@ export class LaserMirrorGame implements GameModule {
 
     // Marco soporte del espejo
     c.fillStyle = '#fdcb6e';
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 3;
     c.beginPath();
     c.roundRect(-m.size * 0.5 - 3, -7, m.size + 6, 14, 4);
@@ -731,7 +731,7 @@ export class LaserMirrorGame implements GameModule {
 
     // Etiqueta P2 instructiva
     c.save();
-    c.fillStyle = 'var(--ink-secondary)';
+    c.fillStyle = '#636e72';
     c.font = '12px "Patrick Hand", cursive';
     c.textAlign = 'center';
     c.fillText(`${Math.round(m.targetAngle)}° ↻`, m.x, m.y + m.size * 0.5 + 14);
@@ -750,7 +750,7 @@ export class LaserMirrorGame implements GameModule {
 
     // Diamante cristalino
     c.fillStyle = isLit ? '#00cec9' : '#b2bec3';
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 3;
     c.beginPath();
     c.moveTo(cry.x, cry.y - cry.radius);
@@ -780,7 +780,7 @@ export class LaserMirrorGame implements GameModule {
 
     c.font = 'bold 22px "Patrick Hand", cursive';
     c.textAlign = 'left';
-    c.fillStyle = 'var(--ink-primary)';
+    c.fillStyle = '#2d3436';
     c.fillText(`🔦 ${lvl.name}`, 20, 36);
 
     c.textAlign = 'center';
@@ -788,7 +788,7 @@ export class LaserMirrorGame implements GameModule {
     c.fillText(`Cristales: ${poweredCount} / ${this.crystals.length} 💎`, w / 2, 36);
 
     c.textAlign = 'right';
-    c.fillStyle = 'var(--ink-secondary)';
+    c.fillStyle = '#636e72';
     c.font = '16px "Patrick Hand", cursive';
     const roleText = this.ctx.isHost ? 'P1: Apunta el haz 🔦' : 'P2: Rota los espejos 🪞';
     c.fillText(roleText, w - 20, 36);

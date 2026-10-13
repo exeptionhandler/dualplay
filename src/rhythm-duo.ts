@@ -492,7 +492,7 @@ export class RhythmDuoGame implements GameModule {
     c.fillRect(w * 0.53, 0, laneWidth, h);
 
     // Líneas divisorias doodle
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 3;
     c.beginPath();
     c.moveTo(w / 2, 0);
@@ -501,7 +501,7 @@ export class RhythmDuoGame implements GameModule {
 
     // Línea de Impacto (Hit Zone) con vibración rítmica
     const pulseHeight = (this.beatPulse - 1) * 8;
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 4 + pulseHeight;
     c.beginPath();
     c.moveTo(w * 0.06, targetY);
@@ -534,7 +534,7 @@ export class RhythmDuoGame implements GameModule {
     for (const f of this.feedbacks) {
       c.save();
       c.fillStyle = f.color;
-      c.strokeStyle = 'var(--ink-primary)';
+      c.strokeStyle = '#2d3436';
       c.lineWidth = 3;
       c.font = `bold ${Math.floor(22 * f.scale)}px "Patrick Hand", cursive`;
       c.textAlign = 'center';
@@ -555,7 +555,7 @@ export class RhythmDuoGame implements GameModule {
     c.beginPath();
     c.arc(x, y, r, 0, Math.PI * 2);
     c.fillStyle = pressed ? color : 'white';
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 4;
     c.fill();
     c.stroke();
@@ -570,7 +570,7 @@ export class RhythmDuoGame implements GameModule {
     // Etiqueta del botón
     c.font = 'bold 15px "Patrick Hand", cursive';
     c.textAlign = 'center';
-    c.fillStyle = 'var(--ink-primary)';
+    c.fillStyle = '#2d3436';
     c.fillText(label, x, y + 54);
     c.restore();
   }
@@ -591,7 +591,7 @@ export class RhythmDuoGame implements GameModule {
     c.beginPath();
     c.roundRect(x - w / 2, y - h / 2, w, h, 8);
     c.fillStyle = color;
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 3;
     c.fill();
     c.stroke();
@@ -614,14 +614,14 @@ export class RhythmDuoGame implements GameModule {
     c.fillRect(20, 14, w - 40, 10);
     c.fillStyle = '#00b894';
     c.fillRect(20, 14, (w - 40) * progress, 10);
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 2;
     c.strokeRect(20, 14, w - 40, 10);
 
     // Marcador
     c.font = 'bold 22px "Patrick Hand", cursive';
     c.textAlign = 'left';
-    c.fillStyle = 'var(--ink-primary)';
+    c.fillStyle = '#2d3436';
     c.fillText(`🎵 ${this.score}`, 24, 52);
 
     // Combo cooperativo y multiplicador conjunto
@@ -631,13 +631,13 @@ export class RhythmDuoGame implements GameModule {
       c.font = 'bold 24px "Patrick Hand", cursive';
       c.fillText(`🔥 COMBO x${this.combo} (Mult: ${this.multiplier}x)`, w / 2, 52);
     } else {
-      c.fillStyle = 'var(--ink-secondary)';
+      c.fillStyle = '#636e72';
       c.font = '19px "Patrick Hand", cursive';
       c.fillText(`¡Sincronía Rítmica!`, w / 2, 52);
     }
 
     c.textAlign = 'right';
-    c.fillStyle = 'var(--ink-primary)';
+    c.fillStyle = '#2d3436';
     c.font = 'bold 20px "Patrick Hand", cursive';
     const remainingSec = Math.max(0, Math.ceil((this.songDurationMs - elapsed) / 1000));
     c.fillText(`⏱️ ${remainingSec}s`, w - 24, 52);

@@ -64,13 +64,13 @@ const TETROMINOS = [
 
 const COLORS = [
   'transparent',
-  'var(--accent-blue)',   // I
-  '#a29bfe',              // J
-  'var(--accent-yellow)', // L (using yellow, or an orange if available, let's use yellow)
-  '#ffeaa7',              // O
-  'var(--accent-green)',  // S
-  'var(--accent-purple)', // T
-  'var(--accent-red)'     // Z
+  '#00cec9',   // 1: I (cyan)
+  '#0984e3',   // 2: J (blue)
+  '#e17055',   // 3: L (orange)
+  '#f1c40f',   // 4: O (yellow)
+  '#2ecc71',   // 5: S (green)
+  '#9b59b6',   // 6: T (purple)
+  '#e74c3c'    // 7: Z (red)
 ];
 
 interface PieceState {
@@ -357,14 +357,23 @@ export class TetrisDual implements GameModule {
       this.lastInputTs = state.tInput.ts;
       // Map 'by' to the correct piece
       const isMe = state.tInput.by === this.ctx.me.id;
-      // If host got input from guest:
+      // If host got input from guest / bot:
       if (!isMe) {
         const targetP = this.p2;
         let dx = 0, dy = 0, dr = 0;
-        if (state.tInput.act === 'left') dx = -1;
-        if (state.tInput.act === 'right') dx = 1;
-        if (state.tInput.act === 'rot') dr = 1;
-        if (state.tInput.act === 'drop') dy = 1;
+        const act = state.tInput.act || state.tInput.action;
+        if (act === 'left') dx = -1;
+        if (act === 'right') dx = 1;
+        if (act === 'rot') dr = 1;
+        if (act === 'drop') dy = 1;
+        if (act === 'hard_drop') {
+          targetP.y = this.getGhostY(targetP, this.p1);
+          this.lock(targetP);
+          this.clearLines();
+          this.spawn(targetP, 14);
+          this.broadcastState();
+          return;
+        }
 
         if (!this.collides(targetP, dx, dy, dr) && !this.collidesWithOther(targetP, this.p1, dx, dy, dr)) {
           targetP.x += dx;
@@ -474,13 +483,13 @@ export class TetrisDual implements GameModule {
     this.particles.updateAndDraw(c);
 
     // Border
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 4;
     c.strokeRect(0, 0, this.COLS * cellSize, this.ROWS * cellSize);
     c.restore();
 
     // Draw Buttons (Bottom 20%)
-    c.font = '26px "Patrick Hand", cursive';
+    c.font = 'bold 24px "Patrick Hand", cursive, sans-serif';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
     
@@ -490,15 +499,15 @@ export class TetrisDual implements GameModule {
       const bw = b.w * w;
       const bh = b.h * h;
 
-      c.fillStyle = b.id === 'hard_drop' ? '#ffeaa7' : 'white';
-      c.strokeStyle = 'var(--ink-primary)';
-      c.lineWidth = 3;
+      c.fillStyle = b.id === 'hard_drop' ? '#ffeaa7' : '#ffffff';
+      c.strokeStyle = '#2d3436';
+      c.lineWidth = 2.5;
       c.beginPath();
       c.roundRect(bx, by, bw, bh, 10);
       c.fill();
       c.stroke();
       
-      c.fillStyle = 'var(--ink-primary)';
+      c.fillStyle = '#2d3436';
       c.fillText(b.text, bx + bw/2, by + bh/2);
     }
   }
@@ -577,7 +586,7 @@ export class TetrisDual implements GameModule {
   private drawBlock(c: CanvasRenderingContext2D, x: number, y: number, size: number, id: number) {
     const pad = 2;
     c.fillStyle = COLORS[id];
-    c.strokeStyle = 'var(--ink-primary)';
+    c.strokeStyle = '#2d3436';
     c.lineWidth = 2;
     
     // Doodle slightly irregular fill
@@ -1983,7 +1992,8 @@ export class CrystalBridgeGame implements GameModule {
     if (this.ctx.isHost && state.cbStep && state.cbStep.ts !== this.lastActionTs) {
       this.lastActionTs = state.cbStep.ts;
       if (state.cbStep.by !== this.ctx.me.id) {
-        this.processStep(state.cbStep.side);
+        const sideStr: 'left' | 'right' = (state.cbStep.side === 0 || state.cbStep.side === 'left') ? 'left' : 'right';
+        this.processStep(sideStr);
         this.broadcastState();
       }
     }
