@@ -402,7 +402,10 @@ export class RhythmDuoGame implements GameModule {
       stars: this.maxCombo >= 15 ? 3 : (won ? 2 : 1),
       newBadge,
       onRematch: () => this.handleRestart(),
-      onLobby: () => this.ctx.sync.setState({ host_location: null })
+      onLobby: () => {
+        this.ctx.sync.setState({ host_location: null });
+        this.ctx.onLobby?.();
+      }
     });
   }
 

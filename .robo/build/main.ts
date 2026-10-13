@@ -34,6 +34,8 @@ function getIsHost(): boolean {
   return sorted[0]?.id === me.id;
 }
 
+let lastRenderedLobbyHostLocation: string | null | undefined = undefined;
+
 // ── Navigation state change handler ───────────────────
 function handleNavigationChange(state: any) {
   if (state.host_location === null && currentScreen !== 'lobby') {
@@ -41,14 +43,17 @@ function handleNavigationChange(state: any) {
     return;
   }
   if (currentScreen === 'lobby') {
-    renderLobby(participants, {
-      onGameSelect: handleGameSelect,
-      hostLocation: state.host_location,
-      onInvite: handleInvite,
-      inviteType: getInviteType(),
-      onPlayBot: handlePlayWithBot,
-      onProfileUpdate: handleProfileUpdate,
-    });
+    if (state.host_location !== lastRenderedLobbyHostLocation) {
+      lastRenderedLobbyHostLocation = state.host_location;
+      renderLobby(participants, {
+        onGameSelect: handleGameSelect,
+        hostLocation: state.host_location,
+        onInvite: handleInvite,
+        inviteType: getInviteType(),
+        onPlayBot: handlePlayWithBot,
+        onProfileUpdate: handleProfileUpdate,
+      });
+    }
   }
 }
 
@@ -200,6 +205,7 @@ function setupSyncListeners() {
             sync,
             me,
             isHost: getIsHost(),
+            onLobby: () => goLobby(),
           });
           gamePendingInit = null;
         }
@@ -236,13 +242,9 @@ function setupSyncListeners() {
 
 function goLobby(): void {
   currentScreen = 'lobby';
+  lastRenderedLobbyHostLocation = null;
   sound.startLobbyBgm();
-  const hasBot = participants.some(p => p.id === DUOBOT_USER.id);
-  if (hasBot) {
-    duoBot.start('lobby');
-  } else {
-    duoBot.stop();
-  }
+  duoBot.stop();
   cleanupGameView();
   document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
 
@@ -251,11 +253,14 @@ function goLobby(): void {
   }
   currentGame = null;
   gamePendingInit = null;
-  sync.setState({ host_location: null });
+
+  if (sync.getState().host_location !== null) {
+    sync.setState({ host_location: null });
+  }
 
   renderLobby(participants, {
     onGameSelect: handleGameSelect,
-    hostLocation: sync.getState().host_location,
+    hostLocation: null,
     onInvite: handleInvite,
     inviteType: getInviteType(),
     onPlayBot: handlePlayWithBot,
@@ -268,6 +273,7 @@ function goGame(gameId: GameId): void {
   if (!entry) return;
 
   currentScreen = gameId;
+  lastRenderedLobbyHostLocation = undefined;
   sound.startGameBgm();
   cleanupGameView();
   document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
@@ -295,7 +301,7 @@ function goGame(gameId: GameId): void {
       gamePendingInit = { mod, canvas, isHost };
     } else {
       setWaitingOverlay(false);
-      mod.init({ canvas, sync, me, isHost });
+      mod.init({ canvas, sync, me, isHost, onLobby: () => goLobby() });
     }
 
     const hasBot = participants.some(p => p.id === DUOBOT_USER.id);
@@ -362,7 +368,10 @@ function handlePlayWithBot(): void {
 
   setWaitingOverlay(false);
   updateGamePartner(DUOBOT_USER);
-  duoBot.start(currentScreen);
+
+  if (currentScreen !== 'lobby') {
+    duoBot.start(currentScreen);
+  }
 
   if (gamePendingInit) {
     gamePendingInit.mod.init({
@@ -370,6 +379,7 @@ function handlePlayWithBot(): void {
       sync,
       me,
       isHost: true,
+      onLobby: () => goLobby(),
     });
     gamePendingInit = null;
   } else if (currentScreen === 'lobby') {

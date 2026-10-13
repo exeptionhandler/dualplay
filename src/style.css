@@ -92,6 +92,7 @@ body {
   justify-content: flex-start;
   overflow: hidden;
   overflow-x: hidden;
+  height: 100%;
 }
 
 /* ── Logo / Brand ───────────────────────────────── */
@@ -521,9 +522,13 @@ body {
 /* ── Lobby Content & Responsive Grid ─────────────── */
 .lobby-content {
   flex: 1;
+  min-height: 0;
   width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 24px 20px 100px; /* Safe padding for Discord overlay dock */
   display: flex;
   flex-direction: column;

@@ -47,6 +47,11 @@ export class DuoBot {
   }
 
   public start(screen: string) {
+    if (screen === 'lobby' || !screen) {
+      this.stop();
+      return;
+    }
+
     this.active = true;
     this.currentScreen = screen;
     this.tickCount = 0;
@@ -69,6 +74,7 @@ export class DuoBot {
 
   public stop() {
     this.active = false;
+    this.currentScreen = '';
     this.stopLoop();
     this.sync.off('stateChange', this.handleStateChange);
     this.pendingTimeouts.forEach(t => clearTimeout(t));
@@ -84,16 +90,16 @@ export class DuoBot {
   }
 
   private handleStateChange = (state: Record<string, any>) => {
-    if (!this.active) return;
+    if (!this.active || this.currentScreen === 'lobby' || !this.currentScreen) return;
 
     // 1. Star Fishing Co-Tapping (captura sincronizada)
-    if (state.sfTap && state.sfTap.by !== DUOBOT_USER.id) {
+    if (this.currentScreen === 'star-fishing' && state.sfTap && state.sfTap.by !== DUOBOT_USER.id) {
       const starId = state.sfTap.id || state.sfTap.starId;
       // React with human-like delay (120ms - 210ms)
       const delay = 120 + Math.random() * 90;
       const t = window.setTimeout(() => {
         this.pendingTimeouts.delete(t);
-        if (!this.active) return;
+        if (!this.active || this.currentScreen !== 'star-fishing') return;
         this.sync.setState({
           sfTap: { id: starId, starId, ts: Date.now(), by: DUOBOT_USER.id }
         });
@@ -102,7 +108,7 @@ export class DuoBot {
     }
 
     // 2. Inverse Gravity Shield & Zap
-    if (state.igState && state.igState.obs && Array.isArray(state.igState.obs)) {
+    if (this.currentScreen === 'inverse-gravity' && state.igState && state.igState.obs && Array.isArray(state.igState.obs)) {
       const danger = state.igState.obs.some((o: any) => o.x > 80 && o.x < 190);
       if (danger && !state.igShieldActive) {
         this.sync.setState({
@@ -118,23 +124,24 @@ export class DuoBot {
     }
 
     // 3. Balloon Emergency Boost
-    if (state.balloonState) {
+    if (this.currentScreen === 'balloon' && state.balloonState && !state.balloonState.over) {
       const b = state.balloonState;
-      if (b.y > 0.72 && (!b.lastTapBy || b.lastTapBy !== DUOBOT_USER.id)) {
+      // In BalloonGame, balloon.y is pixels, vy > 0 means moving downward
+      if (b.vy > 1 && b.y > 220 && (!b.lastTapBy || b.lastTapBy !== DUOBOT_USER.id)) {
         const t = window.setTimeout(() => {
           this.pendingTimeouts.delete(t);
-          if (!this.active) return;
+          if (!this.active || this.currentScreen !== 'balloon') return;
           this.sync.setState({
-            balloonTap: { ts: Date.now(), by: DUOBOT_USER.id }
+            pulse: { ts: Date.now(), by: DUOBOT_USER.id }
           });
-        }, 150);
+        }, 120 + Math.random() * 80);
         this.pendingTimeouts.add(t);
       }
     }
   };
 
   private tick() {
-    if (!this.active) return;
+    if (!this.active || this.currentScreen === 'lobby' || !this.currentScreen) return;
     this.tickCount++;
 
     const state = this.sync.getState();

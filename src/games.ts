@@ -25,6 +25,7 @@ export interface GameContext {
   sync: Sync;
   me: any;
   isHost: boolean;
+  onLobby?: () => void;
 }
 
 export interface GameModule {
@@ -475,7 +476,10 @@ export class TetrisDual implements GameModule {
           stars: 3,
           newBadge: badge || undefined,
           onRematch: () => this.restartGame(),
-          onLobby: () => this.ctx.sync.setState({ host_location: null }),
+          onLobby: () => {
+            this.ctx.sync.setState({ host_location: null });
+            this.ctx.onLobby?.();
+          },
         });
       } else {
         sound.defeat();
@@ -486,7 +490,10 @@ export class TetrisDual implements GameModule {
           statsText: `Líneas cooperativas logradas: ${this.totalLines} / 8 meta`,
           stars: this.totalLines >= 4 ? 2 : 1,
           onRematch: () => this.restartGame(),
-          onLobby: () => this.ctx.sync.setState({ host_location: null }),
+          onLobby: () => {
+            this.ctx.sync.setState({ host_location: null });
+            this.ctx.onLobby?.();
+          },
         });
       }
     }
@@ -756,24 +763,27 @@ export class BalloonGame implements GameModule {
     this.restart();
 
     ctx.canvas.addEventListener('pointerdown', this.onTap);
-
-    if (ctx.isHost) {
-      this.syncInterval = setInterval(() => {
-        ctx.sync.setState({
-          balloonState: {
-            x: this.balloon.x,
-            y: this.balloon.y,
-            vy: this.balloon.vy,
-            score: this.score,
-            over: this.gameOver,
-            ts: Date.now()
-          }
-        });
-      }, 80);
-    }
-
+    this.startSyncLoop();
     ctx.sync.on('stateChange', this.onStateChange);
     this.loop();
+  }
+
+  private startSyncLoop() {
+    if (this.syncInterval) clearInterval(this.syncInterval);
+    if (!this.ctx?.isHost) return;
+    this.syncInterval = setInterval(() => {
+      if (this.gameOver) return;
+      this.ctx.sync.setState({
+        balloonState: {
+          x: this.balloon.x,
+          y: this.balloon.y,
+          vy: this.balloon.vy,
+          score: this.score,
+          over: this.gameOver,
+          ts: Date.now()
+        }
+      });
+    }, 80);
   }
 
   private lastTapBy: string | null = null;
@@ -871,7 +881,12 @@ export class BalloonGame implements GameModule {
   };
 
   private triggerGameOver() {
+    if (this.gameOver) return;
     this.gameOver = true;
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
     sound.explosion();
     haptic([80, 80, 140]);
     this.particles.spawnConfetti(this.balloon.x, this.balloon.y, 45);
@@ -898,11 +913,13 @@ export class BalloonGame implements GameModule {
       onRematch: () => {
         this.restart();
         if (this.ctx.isHost) {
+          this.startSyncLoop();
           this.ctx.sync.setState({ balloonState: { over: false, score: 0, ts: Date.now() } });
         }
       },
       onLobby: () => {
-        this.ctx.sync.setState({ host_location: null });
+        this.ctx.sync.setState({ balloonState: null, host_location: null });
+        this.ctx.onLobby?.();
       }
     });
   }
@@ -1161,9 +1178,16 @@ export class BalloonGame implements GameModule {
   }
 
   destroy(): void {
+    this.gameOver = true;
     cancelAnimationFrame(this.animId);
-    if (this.syncInterval) clearInterval(this.syncInterval);
-    if (this.powerupTimeout) clearTimeout(this.powerupTimeout);
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
+    if (this.powerupTimeout) {
+      clearTimeout(this.powerupTimeout);
+      this.powerupTimeout = null;
+    }
     this.ctx.canvas.removeEventListener('pointerdown', this.onTap);
     this.ctx.sync.off('stateChange', this.onStateChange);
   }
@@ -1324,7 +1348,10 @@ export class MinesweeperGame implements GameModule {
         statsText: '¡Trabajen en equipo para la próxima!',
         stars: 1,
         onRematch: () => this.handleRestart(),
-        onLobby: () => this.ctx.sync.setState({ host_location: null })
+        onLobby: () => {
+          this.ctx.sync.setState({ host_location: null });
+          this.ctx.onLobby?.();
+        }
       });
       return;
     }
@@ -1510,7 +1537,10 @@ export class MinesweeperGame implements GameModule {
           stars: 3,
           newBadge: badge || undefined,
           onRematch: () => this.handleRestart(),
-          onLobby: () => this.ctx.sync.setState({ host_location: null })
+          onLobby: () => {
+            this.ctx.sync.setState({ host_location: null });
+            this.ctx.onLobby?.();
+          }
         });
       }
     }
@@ -2002,7 +2032,10 @@ export class CrystalBridgeGame implements GameModule {
         newBadge: badge || undefined,
         canSwapRoles: true,
         onRematch: (swap) => this.handleRestart(swap),
-        onLobby: () => this.ctx.sync.setState({ host_location: null })
+        onLobby: () => {
+          this.ctx.sync.setState({ host_location: null });
+          this.ctx.onLobby?.();
+        }
       });
       return;
     }
@@ -2039,7 +2072,10 @@ export class CrystalBridgeGame implements GameModule {
           stars: 1,
           canSwapRoles: true,
           onRematch: (swap) => this.handleRestart(swap),
-          onLobby: () => this.ctx.sync.setState({ host_location: null })
+          onLobby: () => {
+            this.ctx.sync.setState({ host_location: null });
+            this.ctx.onLobby?.();
+          }
         });
       } else {
         // Si ya superaron el checkpoint, reaparecen en el checkpoint
@@ -2627,7 +2663,10 @@ export class StarFishingGame implements GameModule {
       stars: this.score >= 25 ? 3 : (this.won ? 2 : 1),
       newBadge,
       onRematch: () => this.handleRestart(),
-      onLobby: () => this.ctx.sync.setState({ host_location: null })
+      onLobby: () => {
+        this.ctx.sync.setState({ host_location: null });
+        this.ctx.onLobby?.();
+      }
     });
   }
 
@@ -3411,7 +3450,10 @@ export class InverseGravityGame implements GameModule {
               newBadge,
               canSwapRoles: true,
               onRematch: (swap) => this.handleRestart(swap),
-              onLobby: () => this.ctx.sync.setState({ host_location: null })
+              onLobby: () => {
+                this.ctx.sync.setState({ host_location: null });
+                this.ctx.onLobby?.();
+              }
             });
           }
           continue;
@@ -4342,7 +4384,10 @@ export class FingerHockeyGame implements GameModule {
           stars: humansWon ? (this.scoreAI === 0 ? 3 : 2) : 1,
           newBadge,
           onRematch: () => this.handleRestart(),
-          onLobby: () => this.ctx.sync.setState({ host_location: null })
+          onLobby: () => {
+            this.ctx.sync.setState({ host_location: null });
+            this.ctx.onLobby?.();
+          }
         });
       }
     }

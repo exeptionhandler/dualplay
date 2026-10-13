@@ -187,6 +187,7 @@ export function updateGamePartner(partner?: any): void {
 
 export function renderLobby(participants: any[], cbs: LobbyCallbacks): void {
   cleanupGameView();
+  document.querySelectorAll('.modal-backdrop, .rematch-backdrop').forEach(el => el.remove());
   const tagClass = (t: GameEntry['tag']) => 'game-tag tag-' + t;
   const profile = profileManager.getProfile();
   const inviteType = cbs.inviteType ?? 'link';
@@ -816,9 +817,21 @@ export function showProfileModal(onSave: () => void): void {
 
   document.body.appendChild(backdrop);
 
+  const purgeModals = () => {
+    document.querySelectorAll('.modal-backdrop, .rematch-backdrop').forEach(el => el.remove());
+  };
+
   // Close
-  backdrop.querySelector('#btn-close-profile')!.addEventListener('click', () => {
-    backdrop.remove();
+  backdrop.querySelector('#btn-close-profile')?.addEventListener('click', () => {
+    sound.click();
+    purgeModals();
+  });
+
+  // Click outside modal content
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) {
+      purgeModals();
+    }
   });
 
   // Accessory select
@@ -849,13 +862,13 @@ export function showProfileModal(onSave: () => void): void {
       sound.click();
       const badgeId = card.getAttribute('data-badge')!;
       profileManager.toggleEquipBadge(badgeId);
-      backdrop.remove();
+      purgeModals();
       showProfileModal(onSave); // Re-render modal with updated badges
     });
   });
 
   // Save
-  backdrop.querySelector('#btn-save-profile')!.addEventListener('click', () => {
+  backdrop.querySelector('#btn-save-profile')?.addEventListener('click', () => {
     const inputNick = (backdrop.querySelector('#input-nickname') as HTMLInputElement).value.trim();
     profileManager.updateProfile({
       customName: inputNick,
@@ -864,7 +877,7 @@ export function showProfileModal(onSave: () => void): void {
     });
     sound.victory();
     showToast('¡Perfil y medallas actualizados! ✨');
-    backdrop.remove();
+    purgeModals();
     onSave();
   });
 }
@@ -893,7 +906,7 @@ export function registerQuickPlayCallback(cb: () => void): void {
 
 export function showRematchModal(opts: RematchModalOptions): void {
   // Prevent duplicate modals
-  document.querySelector('.rematch-backdrop')?.remove();
+  document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
 
   const profile = profileManager.getProfile();
   const stars = opts.stars ?? (opts.won ? 3 : 1);
@@ -965,27 +978,31 @@ export function showRematchModal(opts: RematchModalOptions): void {
     haptic(40);
   }
 
+  const purgeModals = () => {
+    document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
+  };
+
   backdrop.querySelector('#btn-modal-rematch')?.addEventListener('click', () => {
     sound.click();
-    backdrop.remove();
+    purgeModals();
     opts.onRematch(false);
   });
 
   backdrop.querySelector('#btn-modal-swap')?.addEventListener('click', () => {
     sound.click();
-    backdrop.remove();
+    purgeModals();
     opts.onRematch(true);
   });
 
   backdrop.querySelector('#btn-modal-quickplay')?.addEventListener('click', () => {
     sound.click();
-    backdrop.remove();
+    purgeModals();
     quickPlayAction?.();
   });
 
   backdrop.querySelector('#btn-modal-lobby')?.addEventListener('click', () => {
     sound.click();
-    backdrop.remove();
+    purgeModals();
     opts.onLobby();
   });
 }

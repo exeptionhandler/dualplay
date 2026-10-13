@@ -355,7 +355,10 @@ export class LaserMirrorGame implements GameModule {
         }
         this.handleRestart();
       },
-      onLobby: () => this.ctx.sync.setState({ host_location: null })
+      onLobby: () => {
+        this.ctx.sync.setState({ host_location: null });
+        this.ctx.onLobby?.();
+      }
     });
   }
 
