@@ -98,6 +98,9 @@ export class TetrisDual implements GameModule {
   private tickTimer = 0;
   private tickRate = 600; // ms per drop
   private lastTime = 0;
+  private totalLines = 0;
+  private gameOver = false;
+  private lastGameOverTs = 0;
   
   // UI Buttons
   private buttons = [
@@ -113,6 +116,8 @@ export class TetrisDual implements GameModule {
   init(ctx: GameContext): void {
     this.ctx = ctx;
     this.canvasCtx = ctx.canvas.getContext('2d')!;
+    this.totalLines = 0;
+    this.gameOver = false;
     
     // Init board
     for (let r = 0; r < this.ROWS; r++) {
@@ -140,8 +145,9 @@ export class TetrisDual implements GameModule {
     p.y = 0;
     p.active = true;
     if (this.collides(p)) {
-      // Game over logic could go here
-      this.board = Array(this.ROWS).fill(0).map(() => new Array(this.COLS).fill(0));
+      if (!this.gameOver) {
+        this.triggerGameOver();
+      }
     }
   }
 
@@ -232,9 +238,73 @@ export class TetrisDual implements GameModule {
       }
     }
     if (linesCleared > 0) {
+      this.totalLines += linesCleared;
       sound.lineClear();
       haptic([30, 40, 60]);
       profileManager.unlockBadge('tetris-master');
+      if (this.totalLines >= 8 && !this.gameOver) {
+        this.triggerWin();
+      }
+    }
+  }
+
+  private triggerWin() {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    sound.victory();
+    profileManager.unlockBadge('tetris-master');
+    const badge = profileManager.addWin('tetris-dual');
+
+    if (this.ctx.isHost) {
+      this.ctx.sync.setState({
+        tGameOver: { won: true, lines: this.totalLines, ts: Date.now() }
+      });
+    }
+
+    showRematchModal({
+      won: true,
+      title: '¡Maestros del Tetris Dual! 🧩',
+      statsText: `Líneas cooperativas: ${this.totalLines} / 8 completadas`,
+      stars: 3,
+      newBadge: badge || undefined,
+      onRematch: () => this.restartGame(),
+      onLobby: () => this.ctx.sync.setState({ host_location: null }),
+    });
+  }
+
+  private triggerGameOver() {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    sound.defeat();
+    profileManager.resetStreak('tetris-dual');
+
+    if (this.ctx.isHost) {
+      this.ctx.sync.setState({
+        tGameOver: { won: false, lines: this.totalLines, ts: Date.now() }
+      });
+    }
+
+    showRematchModal({
+      won: false,
+      title: '¡El tablero llegó al tope! 💥',
+      statsText: `Líneas cooperativas logradas: ${this.totalLines} / 8 meta`,
+      stars: this.totalLines >= 4 ? 2 : 1,
+      onRematch: () => this.restartGame(),
+      onLobby: () => this.ctx.sync.setState({ host_location: null }),
+    });
+  }
+
+  private restartGame() {
+    for (let r = 0; r < this.ROWS; r++) {
+      this.board[r] = new Array(this.COLS).fill(0);
+    }
+    this.totalLines = 0;
+    this.gameOver = false;
+    if (this.ctx.isHost) {
+      this.spawn(this.p1, 4);
+      this.spawn(this.p2, 14);
+      this.broadcastState();
+      this.ctx.sync.setState({ tGameOver: null });
     }
   }
 
@@ -389,6 +459,37 @@ export class TetrisDual implements GameModule {
       this.p1 = state.tState.p1;
       this.p2 = state.tState.p2;
     }
+
+    if (state.tGameOver && !this.gameOver && state.tGameOver.ts !== this.lastGameOverTs) {
+      this.lastGameOverTs = state.tGameOver.ts;
+      this.gameOver = true;
+      this.totalLines = state.tGameOver.lines;
+      if (state.tGameOver.won) {
+        sound.victory();
+        profileManager.unlockBadge('tetris-master');
+        const badge = profileManager.addWin('tetris-dual');
+        showRematchModal({
+          won: true,
+          title: '¡Maestros del Tetris Dual! 🧩',
+          statsText: `Líneas cooperativas: ${this.totalLines} / 8 completadas`,
+          stars: 3,
+          newBadge: badge || undefined,
+          onRematch: () => this.restartGame(),
+          onLobby: () => this.ctx.sync.setState({ host_location: null }),
+        });
+      } else {
+        sound.defeat();
+        profileManager.resetStreak('tetris-dual');
+        showRematchModal({
+          won: false,
+          title: '¡El tablero llegó al tope! 💥',
+          statsText: `Líneas cooperativas logradas: ${this.totalLines} / 8 meta`,
+          stars: this.totalLines >= 4 ? 2 : 1,
+          onRematch: () => this.restartGame(),
+          onLobby: () => this.ctx.sync.setState({ host_location: null }),
+        });
+      }
+    }
   };
 
   private loop = () => {
@@ -442,6 +543,12 @@ export class TetrisDual implements GameModule {
     const cellSize = Math.min(w / this.COLS, boardH / this.ROWS);
     const offsetX = (w - (cellSize * this.COLS)) / 2;
     const offsetY = (boardH - (cellSize * this.ROWS)) / 2;
+
+    // Header Scoreboard Banner
+    c.fillStyle = '#2d3436';
+    c.font = 'bold 20px "Patrick Hand", cursive, sans-serif';
+    c.textAlign = 'center';
+    c.fillText(`🧩 Líneas Cooperativas: ${this.totalLines} / 8 meta`, w / 2, Math.max(22, offsetY - 10));
 
     c.save();
     c.translate(offsetX, offsetY);
@@ -772,18 +879,22 @@ export class BalloonGame implements GameModule {
     const seconds = Math.floor((Date.now() - this.startTime) / 1000);
     const won = seconds >= 30;
 
+    let newBadge: string | undefined = undefined;
     if (won) {
       profileManager.unlockBadge('balloon-ace');
-      profileManager.addWin();
+      const b = profileManager.addWin('balloon');
+      if (b) newBadge = b;
       sound.victory();
     } else {
-      profileManager.resetStreak();
+      profileManager.resetStreak('balloon');
     }
 
     showRematchModal({
       won,
       title: won ? '¡Acróbatas del Globo!' : '¡El globo cayó al suelo! 💥',
       statsText: `Toques en equipo: ${this.score} · Tiempo: ${seconds}s`,
+      stars: won ? (seconds >= 45 ? 3 : 2) : 1,
+      newBadge,
       onRematch: () => {
         this.restart();
         if (this.ctx.isHost) {
@@ -1199,7 +1310,7 @@ export class MinesweeperGame implements GameModule {
       this.won = false;
       sound.explosion();
       haptic([100, 100, 150]);
-      profileManager.resetStreak();
+      profileManager.resetStreak('minesweeper');
 
       for (let rr = 0; rr < MS_ROWS; rr++) {
         for (let cc = 0; cc < MS_COLS; cc++) {
@@ -1211,6 +1322,7 @@ export class MinesweeperGame implements GameModule {
         won: false,
         title: '¡BOOM! Mina activada 💥',
         statsText: '¡Trabajen en equipo para la próxima!',
+        stars: 1,
         onRematch: () => this.handleRestart(),
         onLobby: () => this.ctx.sync.setState({ host_location: null })
       });
@@ -1390,11 +1502,13 @@ export class MinesweeperGame implements GameModule {
         sound.victory();
         haptic([40, 50, 100]);
         profileManager.unlockBadge('minesweeper-pro');
-        profileManager.addWin();
+        const badge = profileManager.addWin('minesweeper');
         showRematchModal({
           won: true,
           title: '¡Tablero Despejado! 🎉',
           statsText: '¡Desactivaron todas las minas en pareja!',
+          stars: 3,
+          newBadge: badge || undefined,
           onRematch: () => this.handleRestart(),
           onLobby: () => this.ctx.sync.setState({ host_location: null })
         });
@@ -1876,14 +1990,16 @@ export class CrystalBridgeGame implements GameModule {
       sound.victory();
       haptic([50, 50, 100]);
       profileManager.unlockBadge('glass-walker');
-      profileManager.addWin();
+      const badge = profileManager.addWin('crystal-bridge');
 
       this.particles.spawnConfetti(this.ctx.canvas.width / 2, this.ctx.canvas.height * 0.15, 40);
 
       showRematchModal({
         won: true,
         title: '¡Cruzaron el Puente! 🎉',
-        statsText: '¡Memoria y trabajo en equipo impecables!',
+        statsText: `¡Memoria y sincronía impecables! Vidas restantes: ${this.lives}`,
+        stars: this.lives >= 3 ? 3 : 2,
+        newBadge: badge || undefined,
         canSwapRoles: true,
         onRematch: (swap) => this.handleRestart(swap),
         onLobby: () => this.ctx.sync.setState({ host_location: null })
@@ -1909,7 +2025,7 @@ export class CrystalBridgeGame implements GameModule {
 
       if (this.lives <= 0) {
         this.gameOver = true;
-        profileManager.resetStreak();
+        profileManager.resetStreak('crystal-bridge');
         sound.defeat();
 
         for (let i = 0; i < CB_ROWS; i++) {
@@ -1920,6 +2036,7 @@ export class CrystalBridgeGame implements GameModule {
           won: false,
           title: '¡Se rompió el cristal! 💔',
           statsText: `Llegaron a la baldosa ${this.avatarRow + 1} de ${CB_ROWS}`,
+          stars: 1,
           canSwapRoles: true,
           onRematch: (swap) => this.handleRestart(swap),
           onLobby: () => this.ctx.sync.setState({ host_location: null })
@@ -2491,20 +2608,24 @@ export class StarFishingGame implements GameModule {
     this.gameOver = true;
     this.won = this.score >= 15;
 
+    let newBadge: string | undefined = undefined;
     if (this.won) {
       sound.victory();
       haptic([50, 50, 100]);
       profileManager.unlockBadge('star-catcher');
-      profileManager.addWin();
+      const b = profileManager.addWin('star-fishing');
+      if (b) newBadge = b;
     } else {
       sound.defeat();
-      profileManager.resetStreak();
+      profileManager.resetStreak('star-fishing');
     }
 
     showRematchModal({
       won: this.won,
       title: this.won ? '¡Pescadores de Élite! ⭐' : '¡Tiempo Agotado! ⏱️',
       statsText: `Estrellas pescadas: ${this.score} ${this.won ? '(¡Meta de 15 superada!)' : '(Meta: 15)'}`,
+      stars: this.score >= 25 ? 3 : (this.won ? 2 : 1),
+      newBadge,
       onRematch: () => this.handleRestart(),
       onLobby: () => this.ctx.sync.setState({ host_location: null })
     });
@@ -3272,18 +3393,22 @@ export class InverseGravityGame implements GameModule {
             this.gameOver = true;
             const distInt = Math.floor(this.distance);
             const won = distInt >= 300;
+            let newBadge: string | undefined = undefined;
             if (won) {
               sound.victory();
               profileManager.unlockBadge('gravity-pilot');
-              profileManager.addWin();
+              const b = profileManager.addWin('inverse-gravity');
+              if (b) newBadge = b;
             } else {
               sound.defeat();
-              profileManager.resetStreak();
+              profileManager.resetStreak('inverse-gravity');
             }
             showRematchModal({
               won,
               title: won ? '¡Ases de la Gravedad! 🚀' : '¡Choque Gravitacional! 💥',
               statsText: `Distancia recorrida: ${distInt}m ${won ? '(¡Meta de 300m lograda!)' : ''}`,
+              stars: distInt >= 500 ? 3 : (won ? 2 : 1),
+              newBadge,
               canSwapRoles: true,
               onRematch: (swap) => this.handleRestart(swap),
               onLobby: () => this.ctx.sync.setState({ host_location: null })
@@ -4198,20 +4323,24 @@ export class FingerHockeyGame implements GameModule {
 
       if (!this.matchEnded) {
         this.matchEnded = true;
+        let newBadge: string | undefined = undefined;
         if (humansWon) {
           sound.victory();
           haptic([40, 50, 100]);
           profileManager.unlockBadge('hockey-legend');
-          profileManager.addWin();
+          const b = profileManager.addWin('finger-hockey');
+          if (b) newBadge = b;
         } else {
           sound.defeat();
-          profileManager.resetStreak();
+          profileManager.resetStreak('finger-hockey');
         }
 
         showRematchModal({
           won: humansWon,
           title: humansWon ? '¡Victoria de los Humanos! 🏒' : '¡La IA se llevó el partido! 🤖',
-          statsText: `Marcador Final: ${this.scoreHumans} - ${this.scoreAI}`,
+          statsText: `Marcador Final: Humanos ${this.scoreHumans} - ${this.scoreAI} IA`,
+          stars: humansWon ? (this.scoreAI === 0 ? 3 : 2) : 1,
+          newBadge,
           onRematch: () => this.handleRestart(),
           onLobby: () => this.ctx.sync.setState({ host_location: null })
         });

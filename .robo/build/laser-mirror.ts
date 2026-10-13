@@ -338,13 +338,15 @@ export class LaserMirrorGame implements GameModule {
     this.won = true;
     sound.victory();
     profileManager.unlockBadge('laser-optics');
-    profileManager.addWin();
+    const badge = profileManager.addWin('laser-mirror');
     this.particles.spawnConfetti(this.ctx.canvas.width / 2, this.ctx.canvas.height / 2, 60);
 
     showRematchModal({
       won: true,
       title: '¡Maestros del Prisma Láser! 🔦✨',
       statsText: `Completaron todos los niveles con éxito.`,
+      stars: 3,
+      newBadge: badge || undefined,
       canSwapRoles: true,
       onRematch: (swap) => {
         if (swap) {

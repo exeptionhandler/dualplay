@@ -110,6 +110,45 @@ export const GAMES: GameEntry[] = [
   },
 ];
 
+export const GAME_HINTS: Record<GameId, { objective: string; controls: string }> = {
+  'tetris-dual': {
+    objective: 'Tablero cooperativo: ¡Limpien líneas en equipo!',
+    controls: '⌨️ [A/D] o Flechas: Mover · [W/Espacio]: Rotar · [S]: Bajar | 📱 Botones táctiles abajo',
+  },
+  'balloon': {
+    objective: '¡Mantengan el globo flotando sin que toque el suelo!',
+    controls: '⌨️ / 📱 Clic o toca debajo del globo para impulsarlo con rebotes elásticos',
+  },
+  'minesweeper': {
+    objective: 'Despejen las celdas seguras. ¡Tienen un escudo compartido de 2 vidas!',
+    controls: '⌨️ / 📱 Clic izq: Revelar celda · Clic der o [F]: Marcar bandera',
+  },
+  'crystal-bridge': {
+    objective: 'Uno ve los cristales seguros; el otro salta sin caer al vacío.',
+    controls: '⌨️ Guía: Recuerda los destellos | Saltador: [←/→] o botones para avanzar',
+  },
+  'star-fishing': {
+    objective: 'Pesquen estrellas sincronizando sus tiros en 45 segundos.',
+    controls: '⌨️ Presiona [Espacio] o [W] en la zona dorada | 📱 Toca la pantalla',
+  },
+  'inverse-gravity': {
+    objective: 'Vuelen juntos esquivando asteroides hasta los 300 metros.',
+    controls: '⌨️ Piloto: [W/Espacio] invierte gravedad | Copiloto: Clic/Tap para destruir asteroides',
+  },
+  'finger-hockey': {
+    objective: '2 humanos en equipo contra la IA: ¡Anoten 5 goles!',
+    controls: '⌨️ / 📱 Arrastra tu paleta con el cursor o dedo para rematar a portería',
+  },
+  'rhythm-duo': {
+    objective: 'Duelo rítmico sincronizado: ¡Encadenen combos musicales!',
+    controls: '⌨️ J1: Tecla [D] (carril izq) · J2: Tecla [K] (carril der) | 📱 Toca tus carriles',
+  },
+  'laser-mirror': {
+    objective: 'Guíen el haz láser rotando prismas para encender los cristales.',
+    controls: '⌨️ J1: Rota emisor con [←/→] | J2: Clic/Tap en los prismas para orientarlos',
+  },
+};
+
 export interface LobbyCallbacks {
   onGameSelect: (gameId: GameId) => void;
   hostLocation?: GameId | null;
@@ -458,6 +497,7 @@ export interface GameViewCallbacks {
 
 export function renderGameView(game: GameEntry, cbs: GameViewCallbacks, partner?: any): HTMLCanvasElement {
   activePartnerState = partner;
+  const hint = GAME_HINTS[game.id] || { objective: game.desc, controls: '¡Coordínense con su compañero!' };
 
   setView(`
     <div class="view game-view" id="screen-game">
@@ -489,9 +529,22 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks, partner?
         </div>
       </div>
 
-      <!-- Canvas Play Area with Doodle Waiting Overlay -->
+      <!-- Canvas Play Area with Doodle Waiting Overlay & Controls Hint Pill -->
       <div class="game-canvas-area" id="canvas-area">
         <canvas id="game-canvas"></canvas>
+
+        <!-- Floating Controls Hint Pill (Doodle banner) -->
+        <div class="game-controls-hint" id="game-controls-hint">
+          <div class="hint-pill-doodle">
+            <span class="hint-pill-bulb">💡</span>
+            <div class="hint-pill-body">
+              <strong class="hint-pill-objective">${hint.objective}</strong>
+              <span class="hint-pill-controls">${hint.controls}</span>
+            </div>
+            <button class="hint-pill-close" id="btn-close-hint" title="Ocultar pista" aria-label="Ocultar pista">✕</button>
+          </div>
+        </div>
+
         <div id="game-waiting-overlay" class="waiting-overlay hidden">
           <div class="waiting-card-doodle">
             <div class="waiting-mascot-wrap">
@@ -599,6 +652,24 @@ export function renderGameView(game: GameEntry, cbs: GameViewCallbacks, partner?
     cbs.onPlayBot?.();
   });
 
+  // Controls Hint Banner auto-fade and close
+  const hintEl = document.getElementById('game-controls-hint');
+  const closeHintBtn = document.getElementById('btn-close-hint');
+  if (hintEl) {
+    const hideHint = () => {
+      hintEl.classList.add('is-hiding');
+      setTimeout(() => hintEl.remove(), 320);
+    };
+    closeHintBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sound.click();
+      hideHint();
+    });
+    setTimeout(() => {
+      if (document.body.contains(hintEl)) hideHint();
+    }, 4500);
+  }
+
   // Reaction buttons
   document.querySelectorAll('.reaction-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -664,15 +735,23 @@ export function showProfileModal(onSave: () => void): void {
         <button class="btn-icon-doodle" id="btn-close-profile" style="padding:4px 8px;">✕</button>
       </div>
 
-      <!-- Streak & Stats -->
-      <div style="display:flex;gap:12px;background:#f0f8ff;border:2px dashed #0984e3;border-radius:12px;padding:10px;">
-        <div style="flex:1;text-align:center;">
-          <div style="font-size:0.9rem;color:var(--ink-secondary);">Racha Actual</div>
-          <div style="font-size:1.8rem;font-weight:bold;">🔥 ${profile.sessionStreak}</div>
+      <!-- Streak & Stats Desk -->
+      <div class="profile-stats-grid">
+        <div class="profile-stat-cell">
+          <div class="profile-stat-label">Racha Actual</div>
+          <div class="profile-stat-value">🔥 ${profile.sessionStreak}</div>
         </div>
-        <div style="flex:1;text-align:center;">
-          <div style="font-size:0.9rem;color:var(--ink-secondary);">Mejor Racha</div>
-          <div style="font-size:1.8rem;font-weight:bold;">🏆 ${profile.bestStreak}</div>
+        <div class="profile-stat-cell">
+          <div class="profile-stat-label">Mejor Racha</div>
+          <div class="profile-stat-value">🏆 ${profile.bestStreak}</div>
+        </div>
+        <div class="profile-stat-cell">
+          <div class="profile-stat-label">Partidas</div>
+          <div class="profile-stat-value">🎮 ${profile.totalGamesPlayed || 0}</div>
+        </div>
+        <div class="profile-stat-cell">
+          <div class="profile-stat-label">Victorias</div>
+          <div class="profile-stat-value">🌟 ${profile.totalWins || 0}</div>
         </div>
       </div>
 
@@ -799,33 +878,76 @@ export interface RematchModalOptions {
   title: string;
   statsText: string;
   canSwapRoles?: boolean;
+  stars?: number;
+  score?: string | number;
+  newBadge?: string;
   onRematch: (swapRoles: boolean) => void;
   onLobby: () => void;
+  onQuickPlay?: () => void;
+}
+
+let globalQuickPlayCb: (() => void) | null = null;
+export function registerQuickPlayCallback(cb: () => void): void {
+  globalQuickPlayCb = cb;
 }
 
 export function showRematchModal(opts: RematchModalOptions): void {
   // Prevent duplicate modals
   document.querySelector('.rematch-backdrop')?.remove();
 
+  const profile = profileManager.getProfile();
+  const stars = opts.stars ?? (opts.won ? 3 : 1);
+  const quickPlayAction = opts.onQuickPlay || globalQuickPlayCb;
+
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop rematch-backdrop';
 
   backdrop.innerHTML = `
-    <div class="modal-doodle rematch-card">
-      <div style="font-size:64px;line-height:1;">${opts.won ? '🎉' : '💥'}</div>
+    <div class="modal-doodle rematch-card ${opts.won ? 'is-victory' : 'is-defeat'}">
+      <div class="rematch-mascot-wrap">
+        <span class="rematch-emoji-main">${opts.won ? '🏆' : '💥'}</span>
+      </div>
+
       <div class="rematch-title">${opts.title}</div>
-      <div class="rematch-stats">${opts.statsText}</div>
+
+      <!-- 3-Star Rating Animation -->
+      <div class="rematch-stars" aria-label="${stars} de 3 estrellas">
+        <span class="star-item ${stars >= 1 ? 'star-active star-pop-1' : 'star-dim'}">⭐</span>
+        <span class="star-item ${stars >= 2 ? 'star-active star-pop-2' : 'star-dim'}">⭐</span>
+        <span class="star-item ${stars >= 3 ? 'star-active star-pop-3' : 'star-dim'}">⭐</span>
+      </div>
+
+      <!-- Stats Pill & Streak -->
+      <div class="rematch-stats-box">
+        <div class="rematch-stats-text">${opts.statsText}</div>
+        <div class="rematch-streak-badge">
+          <span class="streak-flame">🔥</span>
+          <span>Racha de la sesión: <strong>${profile.sessionStreak}</strong></span>
+        </div>
+      </div>
+
+      ${opts.newBadge ? `
+        <div class="rematch-badge-celebration">
+          <span class="badge-sparkle">✨</span>
+          <span class="badge-notice">¡Nueva Medalla Desbloqueada: <strong>${opts.newBadge}</strong>!</span>
+        </div>
+      ` : ''}
 
       <div class="rematch-buttons">
-        <button class="btn btn-primary" id="btn-modal-rematch" style="font-size:1.3rem;">
-          🔄 Jugar de Nuevo
+        <button class="btn btn-primary btn-rematch-action" id="btn-modal-rematch" style="font-size:1.3rem;">
+          🔄 ¡Jugar de Nuevo!
         </button>
         ${opts.canSwapRoles ? `
-          <button class="btn btn-secondary" id="btn-modal-swap" style="font-size:1.1rem;">
+          <button class="btn btn-secondary btn-rematch-action" id="btn-modal-swap" style="font-size:1.1rem;">
             🔀 Intercambiar Roles
           </button>
         ` : ''}
-        <button class="btn btn-secondary" id="btn-modal-lobby" style="font-size:1.1rem;">
+        ${quickPlayAction ? `
+          <button class="btn btn-secondary btn-rematch-action" id="btn-modal-quickplay" style="font-size:1.1rem;">
+            🎲 Partida Aleatoria
+          </button>
+        ` : ''}
+        <button class="btn btn-secondary btn-rematch-action" id="btn-modal-lobby" style="font-size:1.1rem;">
           🏠 Volver al Lobby
         </button>
       </div>
@@ -833,6 +955,15 @@ export function showRematchModal(opts: RematchModalOptions): void {
   `;
 
   document.body.appendChild(backdrop);
+
+  // Play audio feedback
+  if (opts.won) {
+    sound.victory();
+    haptic([60, 80, 120]);
+  } else {
+    sound.defeat();
+    haptic(40);
+  }
 
   backdrop.querySelector('#btn-modal-rematch')?.addEventListener('click', () => {
     sound.click();
@@ -844,6 +975,12 @@ export function showRematchModal(opts: RematchModalOptions): void {
     sound.click();
     backdrop.remove();
     opts.onRematch(true);
+  });
+
+  backdrop.querySelector('#btn-modal-quickplay')?.addEventListener('click', () => {
+    sound.click();
+    backdrop.remove();
+    quickPlayAction?.();
   });
 
   backdrop.querySelector('#btn-modal-lobby')?.addEventListener('click', () => {

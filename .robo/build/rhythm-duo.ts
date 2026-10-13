@@ -384,19 +384,23 @@ export class RhythmDuoGame implements GameModule {
     this.gameOver = true;
     this.won = won;
 
+    let newBadge: string | undefined = undefined;
     if (won) {
       sound.victory();
-      profileManager.addWin();
+      const b = profileManager.addWin('rhythm-duo');
+      if (b) newBadge = b;
       this.particles.spawnConfetti(this.ctx.canvas.width / 2, this.ctx.canvas.height / 2, 50);
     } else {
       sound.defeat();
-      profileManager.resetStreak();
+      profileManager.resetStreak('rhythm-duo');
     }
 
     showRematchModal({
       won,
       title: won ? '¡Sinfonía Cooperativa! 🎵' : '¡Fin de la Melodía!',
       statsText: `Puntuación: ${this.score} · Combo Máximo: x${this.maxCombo}`,
+      stars: this.maxCombo >= 15 ? 3 : (won ? 2 : 1),
+      newBadge,
       onRematch: () => this.handleRestart(),
       onLobby: () => this.ctx.sync.setState({ host_location: null })
     });

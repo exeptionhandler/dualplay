@@ -1,6 +1,6 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { Sync } from './sync';
-import { renderLobby, renderGameView, showToast, setWaitingOverlay, triggerFloatingReaction, updateGamePartner, cleanupGameView } from './ui';
+import { renderLobby, renderGameView, showToast, setWaitingOverlay, triggerFloatingReaction, updateGamePartner, cleanupGameView, registerQuickPlayCallback } from './ui';
 import type { GameId } from './types';
 import { GAME_MODULES } from './games';
 import type { GameModule } from './games';
@@ -137,6 +137,17 @@ async function init() {
 
   setupSyncListeners();
   sync.sendPresence(me);
+
+  registerQuickPlayCallback(() => {
+    const eligible = GAMES.filter(g => g.id !== currentScreen);
+    const pool = eligible.length > 0 ? eligible : GAMES;
+    const randomGame = pool[Math.floor(Math.random() * pool.length)];
+    sound.star();
+    haptic(30);
+    showToast(`🎲 ¡Partida Aleatoria: ${randomGame.name}! ✨`);
+    handleGameSelect(randomGame.id);
+  });
+
   goLobby();
 }
 
@@ -225,6 +236,7 @@ function setupSyncListeners() {
 
 function goLobby(): void {
   currentScreen = 'lobby';
+  sound.startLobbyBgm();
   const hasBot = participants.some(p => p.id === DUOBOT_USER.id);
   if (hasBot) {
     duoBot.start('lobby');
@@ -256,6 +268,7 @@ function goGame(gameId: GameId): void {
   if (!entry) return;
 
   currentScreen = gameId;
+  sound.startGameBgm();
   cleanupGameView();
   document.querySelectorAll('.rematch-backdrop, .modal-backdrop').forEach(el => el.remove());
 

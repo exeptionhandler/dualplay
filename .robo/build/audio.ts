@@ -6,8 +6,14 @@
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private bgmGain: GainNode | null = null;
   private isMuted: boolean = false;
   private volume: number = 0.35;
+  private bgmVolume: number = 0.10;
+  private bgmInterval: any = null;
+  private bgmStep: number = 0;
+  private currentBgmTrack: 'lobby' | 'game' | null = null;
+  private nextBgmTime: number = 0;
 
   constructor() {
     // Restore mute preference
@@ -19,6 +25,16 @@ class SoundEngine {
     if (savedVol !== null) {
       this.volume = parseFloat(savedVol) || 0.35;
     }
+
+    if (typeof window !== 'undefined') {
+      const unlockAudio = () => {
+        this.initCtx();
+        window.removeEventListener('pointerdown', unlockAudio);
+        window.removeEventListener('keydown', unlockAudio);
+      };
+      window.addEventListener('pointerdown', unlockAudio, { passive: true, once: true });
+      window.addEventListener('keydown', unlockAudio, { passive: true, once: true });
+    }
   }
 
   private initCtx() {
@@ -29,6 +45,10 @@ class SoundEngine {
         this.masterGain = this.ctx.createGain();
         this.masterGain.gain.value = this.isMuted ? 0 : this.volume;
         this.masterGain.connect(this.ctx.destination);
+
+        this.bgmGain = this.ctx.createGain();
+        this.bgmGain.gain.value = this.isMuted ? 0 : this.bgmVolume;
+        this.bgmGain.connect(this.masterGain);
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
@@ -41,6 +61,9 @@ class SoundEngine {
     localStorage.setItem('duoplay_muted', String(muted));
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setValueAtTime(muted ? 0 : this.volume, this.ctx.currentTime);
+    }
+    if (this.bgmGain && this.ctx) {
+      this.bgmGain.gain.setValueAtTime(muted ? 0 : this.bgmVolume, this.ctx.currentTime);
     }
   }
 
@@ -518,6 +541,157 @@ class SoundEngine {
       osc.start(t);
       osc.stop(t + 0.2);
     });
+  }
+
+  // ── Procedural Background Music (0 KB Assets) ───────────────
+
+  private playBgmNote(freq: number, time: number, duration: number, type: OscillatorType = 'sine', gainVal = 0.10) {
+    if (!this.ctx || !this.bgmGain) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      const filter = this.ctx.createBiquadFilter();
+
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(type === 'triangle' ? 320 : 1500, time);
+
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, time);
+
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.linearRampToValueAtTime(gainVal, time + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.bgmGain);
+
+      osc.start(time);
+      osc.stop(time + duration);
+    } catch (_) {}
+  }
+
+  /** Música relajante, acústica y acogedora para el Lobby */
+  public startLobbyBgm() {
+    if (this.currentBgmTrack === 'lobby') return;
+    this.stopBgm();
+    this.initCtx();
+    if (!this.ctx) return;
+
+    this.currentBgmTrack = 'lobby';
+    this.bgmStep = 0;
+    this.nextBgmTime = this.ctx.currentTime + 0.05;
+
+    const stepDuration = 0.36; // ~83 BPM eighth-notes
+    const totalSteps = 32;     // 4 bars
+
+    // Notes: C3=130.81, A2=110, F2=87.31, G2=98
+    // Chords: Cmaj7, Am7, Fmaj7, G6
+    const scheduleLobbyStep = (step: number, time: number) => {
+      // Bar 0: Cmaj7 (steps 0-7)
+      if (step === 0) {
+        this.playBgmNote(130.81, time, 0.7, 'triangle', 0.10); // C3 bass
+        this.playBgmNote(261.63, time, 0.32, 'sine', 0.08);    // C4
+      } else if (step === 2) {
+        this.playBgmNote(329.63, time, 0.32, 'sine', 0.08);    // E4
+      } else if (step === 4) {
+        this.playBgmNote(392.00, time, 0.32, 'sine', 0.08);    // G4
+      } else if (step === 6) {
+        this.playBgmNote(493.88, time, 0.32, 'sine', 0.07);    // B4
+      }
+      // Bar 1: Am7 (steps 8-15)
+      else if (step === 8) {
+        this.playBgmNote(110.00, time, 0.7, 'triangle', 0.10); // A2 bass
+        this.playBgmNote(261.63, time, 0.32, 'sine', 0.08);    // C4
+      } else if (step === 10) {
+        this.playBgmNote(329.63, time, 0.32, 'sine', 0.08);    // E4
+      } else if (step === 12) {
+        this.playBgmNote(392.00, time, 0.32, 'sine', 0.08);    // G4
+      } else if (step === 14) {
+        this.playBgmNote(440.00, time, 0.32, 'sine', 0.07);    // A4
+      }
+      // Bar 2: Fmaj7 (steps 16-23)
+      else if (step === 16) {
+        this.playBgmNote(87.31, time, 0.7, 'triangle', 0.10);  // F2 bass
+        this.playBgmNote(220.00, time, 0.32, 'sine', 0.08);    // A3
+      } else if (step === 18) {
+        this.playBgmNote(261.63, time, 0.32, 'sine', 0.08);    // C4
+      } else if (step === 20) {
+        this.playBgmNote(329.63, time, 0.32, 'sine', 0.08);    // E4
+      } else if (step === 22) {
+        this.playBgmNote(392.00, time, 0.32, 'sine', 0.07);    // G4
+      }
+      // Bar 3: G6 (steps 24-31)
+      else if (step === 24) {
+        this.playBgmNote(98.00, time, 0.7, 'triangle', 0.10);  // G2 bass
+        this.playBgmNote(246.94, time, 0.32, 'sine', 0.08);    // B3
+      } else if (step === 26) {
+        this.playBgmNote(293.66, time, 0.32, 'sine', 0.08);    // D4
+      } else if (step === 28) {
+        this.playBgmNote(329.63, time, 0.32, 'sine', 0.08);    // E4
+      } else if (step === 30) {
+        this.playBgmNote(392.00, time, 0.32, 'sine', 0.07);    // G4
+      }
+    };
+
+    this.bgmInterval = setInterval(() => {
+      if (!this.ctx || this.currentBgmTrack !== 'lobby') return;
+      while (this.nextBgmTime < this.ctx.currentTime + 0.25) {
+        scheduleLobbyStep(this.bgmStep, this.nextBgmTime);
+        this.nextBgmTime += stepDuration;
+        this.bgmStep = (this.bgmStep + 1) % totalSteps;
+      }
+    }, 70);
+  }
+
+  /** Música rítmica, alegre y dinámica para los minijuegos */
+  public startGameBgm() {
+    if (this.currentBgmTrack === 'game') return;
+    this.stopBgm();
+    this.initCtx();
+    if (!this.ctx) return;
+
+    this.currentBgmTrack = 'game';
+    this.bgmStep = 0;
+    this.nextBgmTime = this.ctx.currentTime + 0.05;
+
+    const stepDuration = 0.22; // ~136 BPM eighth-notes
+    const totalSteps = 16;     // 2 energetic bars
+
+    const scheduleGameStep = (step: number, time: number) => {
+      // Bass line on beats
+      if (step === 0) this.playBgmNote(130.81, time, 0.38, 'triangle', 0.12); // C3
+      if (step === 4) this.playBgmNote(164.81, time, 0.38, 'triangle', 0.12); // E3
+      if (step === 8) this.playBgmNote(110.00, time, 0.38, 'triangle', 0.12); // A2
+      if (step === 12) this.playBgmNote(98.00, time, 0.38, 'triangle', 0.12); // G2
+
+      // Melody notes (pentatonic bounce)
+      if (step === 0) this.playBgmNote(523.25, time, 0.18, 'sine', 0.09);     // C5
+      else if (step === 2) this.playBgmNote(659.25, time, 0.18, 'sine', 0.09);// E5
+      else if (step === 5) this.playBgmNote(783.99, time, 0.18, 'sine', 0.09);// G5
+      else if (step === 7) this.playBgmNote(659.25, time, 0.18, 'sine', 0.08);// E5
+      else if (step === 8) this.playBgmNote(880.00, time, 0.18, 'sine', 0.09);// A5
+      else if (step === 10) this.playBgmNote(783.99, time, 0.18, 'sine', 0.09);// G5
+      else if (step === 13) this.playBgmNote(659.25, time, 0.18, 'sine', 0.08);// E5
+      else if (step === 15) this.playBgmNote(587.33, time, 0.18, 'sine', 0.08);// D5
+    };
+
+    this.bgmInterval = setInterval(() => {
+      if (!this.ctx || this.currentBgmTrack !== 'game') return;
+      while (this.nextBgmTime < this.ctx.currentTime + 0.25) {
+        scheduleGameStep(this.bgmStep, this.nextBgmTime);
+        this.nextBgmTime += stepDuration;
+        this.bgmStep = (this.bgmStep + 1) % totalSteps;
+      }
+    }, 60);
+  }
+
+  public stopBgm() {
+    if (this.bgmInterval) {
+      clearInterval(this.bgmInterval);
+      this.bgmInterval = null;
+    }
+    this.currentBgmTrack = null;
   }
 }
 

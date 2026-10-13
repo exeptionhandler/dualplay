@@ -1533,27 +1533,217 @@ body {
   }
 }
 
-/* ── Rematch Modal ──────────────────────────────── */
+/* ── In-Game Controls & Objective Hint Pill ────────── */
+.game-controls-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  pointer-events: none;
+  animation: hintPillDrop 0.4s var(--ease-bounce) forwards;
+  max-width: 92%;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.game-controls-hint.is-hiding {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px) scale(0.95);
+  pointer-events: none;
+}
+.hint-pill-doodle {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px 6px 12px;
+  box-shadow: 0 4px 12px rgba(45, 52, 54, 0.12), 2px 3px 0 var(--border);
+  transform: rotate(-0.5deg);
+}
+.hint-pill-bulb {
+  font-size: 20px;
+  line-height: 1;
+}
+.hint-pill-body {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.hint-pill-objective {
+  font-size: 0.95rem;
+  color: var(--ink-primary);
+  font-weight: bold;
+}
+.hint-pill-controls {
+  font-size: 0.85rem;
+  color: var(--ink-secondary);
+}
+.hint-pill-close {
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 50%;
+  transition: color 0.15s ease;
+}
+.hint-pill-close:hover {
+  color: var(--ink-primary);
+}
+
+@keyframes hintPillDrop {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-24px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1) rotate(-0.5deg);
+  }
+}
+
+/* ── Profile Stats Desk ──────────────────────────── */
+.profile-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  background: #f0f8ff;
+  border: 2px dashed #0984e3;
+  border-radius: 12px;
+  padding: 10px 8px;
+}
+.profile-stat-cell {
+  text-align: center;
+}
+.profile-stat-label {
+  font-size: 0.85rem;
+  color: var(--ink-secondary);
+}
+.profile-stat-value {
+  font-size: 1.45rem;
+  font-weight: bold;
+  color: var(--ink-primary);
+}
+@media (max-width: 480px) {
+  .profile-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    row-gap: 10px;
+  }
+}
+
+/* ── Rematch & Celebration Modal ──────────────────── */
 .rematch-card {
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  max-width: 460px;
+  padding: 24px 20px;
+}
+.rematch-card.is-victory {
+  border-color: #f1c40f;
+  box-shadow: 6px 6px 0px #2d3436, 0 0 25px rgba(241, 196, 15, 0.25);
+}
+.rematch-mascot-wrap {
+  font-size: 54px;
+  line-height: 1;
+  animation: trophyWobble 1.2s ease-in-out infinite alternate;
+}
+@keyframes trophyWobble {
+  0% { transform: rotate(-5deg) scale(1); }
+  100% { transform: rotate(5deg) scale(1.08); }
 }
 .rematch-title {
-  font-size: 2.2rem;
+  font-size: 2.1rem;
+  font-weight: bold;
+  line-height: 1.15;
+}
+.rematch-stars {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  font-size: 38px;
+  margin: 2px 0;
+}
+.star-item {
+  display: inline-block;
+  transition: transform 0.3s var(--ease-bounce);
+}
+.star-dim {
+  filter: grayscale(1) opacity(0.3);
+}
+.star-active {
+  filter: drop-shadow(0 2px 6px rgba(241, 196, 15, 0.6));
+}
+.star-pop-1 {
+  animation: starPop 0.4s var(--ease-bounce) 0.1s both;
+}
+.star-pop-2 {
+  animation: starPop 0.4s var(--ease-bounce) 0.25s both;
+}
+.star-pop-3 {
+  animation: starPop 0.4s var(--ease-bounce) 0.4s both;
+}
+@keyframes starPop {
+  0% { transform: scale(0) rotate(-45deg); opacity: 0; }
+  80% { transform: scale(1.3) rotate(10deg); }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+.rematch-stats-box {
+  background: #fdfbf7;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 10px 16px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rematch-stats-text {
+  font-size: 1.25rem;
+  color: var(--ink-primary);
   font-weight: bold;
 }
-.rematch-stats {
-  font-size: 1.3rem;
-  color: var(--ink-secondary);
+.rematch-streak-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 1rem;
+  color: #d63031;
+}
+.rematch-badge-celebration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff9e6;
+  border: 2px solid #f1c40f;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 1.05rem;
+  color: #b7791f;
+  animation: pulseGlow 1.8s infinite;
+}
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 rgba(241, 196, 15, 0); }
+  50% { box-shadow: 0 0 14px rgba(241, 196, 15, 0.4); }
 }
 .rematch-buttons {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   justify-content: center;
   flex-wrap: wrap;
+  margin-top: 6px;
+}
+.btn-rematch-action {
+  flex: 1 1 calc(50% - 10px);
+  min-width: 140px;
 }
 

@@ -121,6 +121,10 @@ export interface UserProfileData {
   equippedBadgeIds: string[]; // max 3
   sessionStreak: number;
   bestStreak: number;
+  totalGamesPlayed: number;
+  totalWins: number;
+  totalLosses: number;
+  gamesPlayedList: string[];
 }
 
 const STORAGE_KEY = 'duoplay_profile_v1';
@@ -141,6 +145,10 @@ export class ProfileManager {
       equippedBadgeIds: ['og-founder'],
       sessionStreak: 0,
       bestStreak: 0,
+      totalGamesPlayed: 0,
+      totalWins: 0,
+      totalLosses: 0,
+      gamesPlayedList: [],
     };
 
     try {
@@ -151,6 +159,7 @@ export class ProfileManager {
           ...defaultData,
           ...parsed,
           unlockedBadgeIds: Array.from(new Set([...defaultData.unlockedBadgeIds, ...(parsed.unlockedBadgeIds || [])])),
+          gamesPlayedList: Array.from(new Set([...(parsed.gamesPlayedList || [])])),
         };
       }
     } catch (_) {}
@@ -205,19 +214,51 @@ export class ProfileManager {
     return true;
   }
 
-  public addWin() {
+  public addWin(gameId?: string): string | null {
     this.profile.sessionStreak++;
     if (this.profile.sessionStreak > this.profile.bestStreak) {
       this.profile.bestStreak = this.profile.sessionStreak;
     }
+    this.profile.totalWins = (this.profile.totalWins || 0) + 1;
+    this.profile.totalGamesPlayed = (this.profile.totalGamesPlayed || 0) + 1;
+
+    let unlockedBadgeName: string | null = null;
+
+    if (gameId) {
+      if (!this.profile.gamesPlayedList) this.profile.gamesPlayedList = [];
+      if (!this.profile.gamesPlayedList.includes(gameId)) {
+        this.profile.gamesPlayedList.push(gameId);
+      }
+      if (this.profile.gamesPlayedList.length >= 9) {
+        if (this.unlockBadge('unbreakable-duo')) {
+          unlockedBadgeName = 'Dúo Imparable 💎';
+        }
+      }
+    }
+
     if (this.profile.sessionStreak >= 3) {
-      this.unlockBadge('streak-king');
+      if (this.unlockBadge('streak-king')) {
+        unlockedBadgeName = unlockedBadgeName || 'Rey de la Racha 👑';
+      }
     }
     this.save();
+    return unlockedBadgeName;
   }
 
-  public resetStreak() {
+  public resetStreak(gameId?: string) {
     this.profile.sessionStreak = 0;
+    this.profile.totalLosses = (this.profile.totalLosses || 0) + 1;
+    this.profile.totalGamesPlayed = (this.profile.totalGamesPlayed || 0) + 1;
+
+    if (gameId) {
+      if (!this.profile.gamesPlayedList) this.profile.gamesPlayedList = [];
+      if (!this.profile.gamesPlayedList.includes(gameId)) {
+        this.profile.gamesPlayedList.push(gameId);
+      }
+      if (this.profile.gamesPlayedList.length >= 9) {
+        this.unlockBadge('unbreakable-duo');
+      }
+    }
     this.save();
   }
 }
